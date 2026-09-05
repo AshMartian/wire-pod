@@ -4,6 +4,7 @@ description: Profile-bound, read-only status access for one enrolled Vector.
 manifest_version: 2
 api_version: 1
 tags: [wirepod, vector, robot]
+provides_tools: [vector_status]
 config_schema:
   bridge_url:
     type: str
