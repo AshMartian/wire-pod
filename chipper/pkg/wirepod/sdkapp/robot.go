@@ -29,12 +29,9 @@ type Robot struct {
 	EventStreamClient vectorpb.ExternalInterface_EventStreamClient
 	EventsStreaming   bool
 	StimState         float32
-	CliffStreaming    bool
-	CliffStatus       uint32
-	CliffDetected     bool
-	CliffStampMs      int64
 	ConnTimer         int32
 	Ctx               context.Context
+	Cancel            context.CancelFunc
 }
 
 func newRobot(serial string) (Robot, int, error) {
@@ -42,7 +39,13 @@ func newRobot(serial string) (Robot, int, error) {
 	var RobotObj Robot
 
 	// generate context
-	RobotObj.Ctx = context.Background()
+	RobotObj.Ctx, RobotObj.Cancel = context.WithCancel(context.Background())
+	registered := false
+	defer func() {
+		if !registered {
+			RobotObj.Cancel()
+		}
+	}()
 
 	// find robot info in BotInfo
 	matched := false
@@ -105,6 +108,7 @@ func newRobot(serial string) (Robot, int, error) {
 
 	// we have confirmed robot connection works, append to list of bots
 	robots = append(robots, RobotObj)
+	registered = true
 	robotIndex := len(robots) - 1
 
 	// begin inactivity timer
@@ -159,24 +163,27 @@ func connTimer(ind int) {
 			logger.Println("Closing SDK connection for " + robots[ind].ESN + ", source: connTimer")
 			removeRobot(robots[ind].ESN, "connTimer")
 			return
-		}  
+		}
 		robots[ind].ConnTimer = robots[ind].ConnTimer + 1
 	}
 }
 
 func removeRobot(serial, source string) {
+	cliffStreams.stop(serial)
 	inhibitCreation = true
 	var newRobots []Robot
 	for ind, robot := range robots {
 		if !strings.EqualFold(serial, robot.ESN) {
 			newRobots = append(newRobots, robot)
 		} else {
+			if robot.Cancel != nil {
+				robot.Cancel()
+			}
 			if source == "server" {
 				timerStopIndexes = append(timerStopIndexes, ind)
 			}
 			robots[ind].CamStreaming = false
 			robots[ind].EventsStreaming = false
-			robots[ind].CliffStreaming = false
 			robots[ind].BcAssumption = false
 			// give time for all of that to stop
 			time.Sleep(time.Second * 3)
