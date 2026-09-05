@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Keep the production service stable while allowing its STT backend to be
+# selected explicitly in its root-owned environment file.
+set -euo pipefail
+
+case "${STT_SERVICE:-vosk}" in
+  whisper)
+    exec "$(dirname "$0")/chipper-whisper"
+    ;;
+  vosk)
+    exec "$(dirname "$0")/chipper-vosk"
+    ;;
+  *)
+    echo "Unsupported STT_SERVICE: ${STT_SERVICE}" >&2
+    exit 64
+    ;;
+esac

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d1021">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <title>Hermes Fleet · WirePod</title>
+  <link rel="stylesheet" href="css/hermes.css">
+</head>
+<body>
+  <main class="shell">
+    <nav class="topbar" aria-label="Hermes navigation">
+      <a class="back" href="/">← <span>WirePod</span></a>
+      <div class="status"><i></i> LOCAL FLEET</div>
+    </nav>
+
+    <header class="hero">
+      <p class="eyebrow">HERMES × VECTOR</p>
+      <h1>Two bodies.<br><em>Two becoming minds.</em></h1>
+      <p class="intro">Each Vector has an isolated Hermes profile, its own memory and its own evolving point of view. WirePod carries safe observations outward and bounded actions home.</p>
+      <div class="flow" aria-label="Bi-directional integration flow">
+        <span>Vector sensors</span><b>→</b><span>WirePod</span><b>⇄</b><span>Hermes</span><b>→</b><span>Embodied response</span>
+      </div>
+    </header>
+
+    <section class="signal-bar" aria-live="polite">
+      <div><strong id="robot-count">—</strong><span>enrolled bodies</span></div>
+      <div><strong>Qwen 3.8</strong><span>local inference</span></div>
+      <div><strong>HMAC</strong><span>signed robot events</span></div>
+      <button id="refresh" type="button">Refresh fleet</button>
+    </section>
+
+    <section class="section-head">
+      <div>
+        <p class="eyebrow">EMBODIMENT</p>
+        <h2>Connected selves</h2>
+      </div>
+      <p>Native Vector SDK status is refreshed live. Use the familiar Bot Settings panel for direct operator control.</p>
+    </section>
+    <section id="fleet" class="fleet" aria-live="polite">
+      <article class="loading">Looking for Vector bodies…</article>
+    </section>
+
+    <section class="ritual">
+      <div class="ritual-mark">✦</div>
+      <div>
+        <p class="eyebrow">IDENTITY RITUAL</p>
+        <h2>Let each agent introduce itself slowly.</h2>
+        <p>An identity starts unassigned: it can choose a name, voice, curiosities and boundaries through real conversations. Face labels are treated as consent-sensitive memories, not guesses.</p>
+      </div>
+      <ol>
+        <li>Open an agent’s Hermes profile.</li>
+        <li>Invite a first introduction, rather than assigning a persona.</li>
+        <li>Agree before it keeps a personal detail about someone.</li>
+      </ol>
+    </section>
+
+    <section class="contract">
+      <p class="eyebrow">INTEGRATION CONTRACT</p>
+      <h2>Deliberate both ways</h2>
+      <div class="contract-grid">
+        <article>
+          <span class="tag incoming">VECTOR → HERMES</span>
+          <h3>Signed events</h3>
+          <p>Face observed, face recognized, and face identity changes flow to each agent’s webhook. Vision landmarks and frames stay on the Pi.</p>
+        </article>
+        <article>
+          <span class="tag outgoing">HERMES → VECTOR</span>
+          <h3>Bounded embodiment</h3>
+          <p>Speak, observe battery and enrolled faces, drive, move head or lift, and emergency-stop. Motion always has a short automatic stop.</p>
+        </article>
+        <article>
+          <span class="tag future">NEXT</span>
+          <h3>Place &amp; perception</h3>
+          <p>Named locations and camera reasoning are intentionally next: they need map/pose and explicit image-privacy contracts, not pretend navigation.</p>
+        </article>
+      </div>
+    </section>
+  </main>
+  <template id="robot-card">
+    <article class="robot-card">
+      <div class="orb" aria-hidden="true"><span></span><span></span></div>
+      <div class="robot-copy">
+        <p class="profile"></p>
+        <h3></h3>
+        <p class="connection"></p>
+        <div class="battery"><i></i><span>Reading battery…</span></div>
+      </div>
+      <a class="operator" href="#">Operator controls <b>→</b></a>
+    </article>
+  </template>
+  <script src="js/hermes.js"></script>
+</body>
+</html>

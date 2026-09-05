@@ -12,13 +12,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 from wirepod import register  # noqa: E402
-from wirepod.tools import BridgeConfig, vector_status  # noqa: E402
+from wirepod.tools import BridgeConfig, vector_command, vector_status  # noqa: E402
 
 
 class BridgeHandler(BaseHTTPRequestHandler):
     token = "test-token"
     esn = "ESN-A"
     mode = "normal"
+    last_command = None
 
     def do_GET(self):  # noqa: N802
         if self.headers.get("Authorization") != f"Bearer {self.token}":
@@ -46,6 +47,21 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self.wfile.write(body[:5])
             return
         self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):  # noqa: N802
+        if self.headers.get("Authorization") != f"Bearer {self.token}":
+            self.send_error(401)
+            return
+        if self.path != "/bridge/v1/robots/ESN-A/commands":
+            self.send_error(404)
+            return
+        type(self).last_command = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+        body = json.dumps({"source_sha": "test-sha", "result": {"action": type(self).last_command["action"], "stop_scheduled": type(self).last_command["action"] != "stop"}}).encode()
+        self.send_response(202)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -93,6 +109,14 @@ class ToolsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "between 1 and 15"):
             self.config(timeout_seconds=30)
 
+    def test_commands_are_profile_bound_and_bounded(self):
+        result = json.loads(vector_command({"text": "hello"}, self.config(), "say"))
+        self.assertTrue(result["ok"])
+        self.assertEqual(BridgeHandler.last_command, {"action": "say", "text": "hello"})
+        rejected = json.loads(vector_command({"left_wheel_mmps": 999, "right_wheel_mmps": 0, "duration_ms": 50}, self.config(), "drive"))
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(rejected["error"], "invalid bounded Vector command")
+
     def test_post_header_deadline_rejects_trickled_response(self):
         BridgeHandler.mode = "trickle"
         started = time.monotonic()
@@ -109,21 +133,23 @@ class ToolsTest(unittest.TestCase):
     def test_register_binds_a_profile_configured_tool(self):
         class Context:
             def __init__(self):
-                self.handler = None
+                self.handlers = {}
+                self.schemas = {}
 
             def get_config(self, name, default=""):
                 settings = {"bridge_url": f"http://127.0.0.1:{self_server.server_port}", "bridge_token": "test-token", "vector_esn": "ESN-A"}
                 return settings.get(name, default)
 
             def register_tool(self, **kwargs):
-                self.handler = kwargs["handler"]
-                self.schema = kwargs["schema"]
+                self.handlers[kwargs["name"]] = kwargs["handler"]
+                self.schemas[kwargs["name"]] = kwargs["schema"]
 
         self_server = self.server
         context = Context()
         register(context)
-        self.assertEqual(context.schema["name"], "vector_status")
-        result = json.loads(context.handler({"vector_esn": "model-supplied-value"}))
+        self.assertEqual(context.schemas["vector_status"]["name"], "vector_status")
+        self.assertIn("vector_stop", context.handlers)
+        result = json.loads(context.handlers["vector_status"]({"vector_esn": "model-supplied-value"}))
         self.assertTrue(result["ok"])
         self.assertEqual(result["robot"]["esn"], "ESN-A")
 

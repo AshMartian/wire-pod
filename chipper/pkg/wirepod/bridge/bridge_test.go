@@ -1,11 +1,14 @@
 package bridge
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/kercre123/wire-pod/chipper/pkg/wirepod/sdkapp"
 )
 
 const (
@@ -104,5 +107,37 @@ func TestCredentialsFromEnvRejectsWeakOrDuplicateTokens(t *testing.T) {
 	}
 	if _, err := credentialsFromEnv(`{"ESN-A":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ESN-B":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`); err == nil {
 		t.Fatal("accepted duplicate credential")
+	}
+}
+
+func TestBridgeCommandIsScopedAndPassesOnlyDecodedAction(t *testing.T) {
+	mux := http.NewServeMux()
+	called := false
+	server := &Server{credentials: []credential{{esn: "ESN-A", token: []byte(tokenA)}}, sourceSHA: "test-sha", snapshot: func() ([]robot, error) {
+		return []robot{{ESN: "ESN-A", Activated: true}}, nil
+	}, control: func(esn string, command sdkapp.HermesCommand) (sdkapp.HermesCommandResult, error) {
+		called = esn == "ESN-A" && command.Action == "say" && command.Text == "hello"
+		return sdkapp.HermesCommandResult{Action: command.Action}, nil
+	}}
+	server.Register(mux)
+	request := httptest.NewRequest(http.MethodPost, "/bridge/v1/robots/ESN-A/commands", strings.NewReader(`{"action":"say","text":"hello"}`))
+	request.Header.Set("Authorization", "Bearer "+tokenA)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, request)
+	if w.Code != http.StatusAccepted || !called {
+		t.Fatalf("command was not dispatched safely: %d %q", w.Code, w.Body.String())
+	}
+	var body struct {
+		Result sdkapp.HermesCommandResult `json:"result"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Result.Action != "say" {
+		t.Fatalf("bad command response: %v %q", err, w.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodPost, "/bridge/v1/robots/ESN-B/commands", strings.NewReader(`{"action":"stop"}`))
+	request.Header.Set("Authorization", "Bearer "+tokenA)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, request)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("cross-scope command accepted: %d", w.Code)
 	}
 }

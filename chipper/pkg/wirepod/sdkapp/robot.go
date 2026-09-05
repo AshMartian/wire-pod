@@ -145,6 +145,13 @@ func connTimer(ind int) {
 	robots[ind].ConnTimer = 0
 	for {
 		time.Sleep(time.Second)
+		// A subscribed Hermes event stream is itself ongoing SDK activity. Keep
+		// the connection alive so face-event delivery does not disappear after
+		// five minutes of otherwise quiet robot time.
+		if hermesEventsActive(robots[ind].ESN) {
+			robots[ind].ConnTimer = 0
+			continue
+		}
 		// check if timer needs to be stopped
 		for _, num := range timerStopIndexes {
 			if num == ind {

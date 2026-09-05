@@ -6,11 +6,13 @@ package bridge
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"strings"
 
 	"github.com/kercre123/wire-pod/chipper/pkg/vars"
+	"github.com/kercre123/wire-pod/chipper/pkg/wirepod/sdkapp"
 )
 
 const prefix = "/bridge/v1/"
@@ -19,6 +21,8 @@ type Server struct {
 	sourceSHA   string
 	snapshot    func() ([]robot, error)
 	credentials []credential
+	control     func(string, sdkapp.HermesCommand) (sdkapp.HermesCommandResult, error)
+	observe     func(string) (sdkapp.HermesObservation, error)
 }
 
 type credential struct {
@@ -44,7 +48,9 @@ func RegisterFromEnv(mux *http.ServeMux, sourceSHA string) bool {
 	if err != nil {
 		return false
 	}
-	(&Server{credentials: credentials, sourceSHA: sourceSHA, snapshot: robotsFromDisk}).Register(mux)
+	server := &Server{credentials: credentials, sourceSHA: sourceSHA, snapshot: robotsFromDisk}
+	server.Register(mux)
+	server.startEventForwarding()
 	return true
 }
 
@@ -54,11 +60,6 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	scope, ok := s.authorized(r)
 	if !ok {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="wire-pod bridge"`)
@@ -68,6 +69,9 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, prefix)
 	switch {
 	case path == "robots":
+		if !allowMethod(w, r, http.MethodGet) {
+			return
+		}
 		robots, err := s.robots()
 		if err != nil {
 			http.Error(w, "robot inventory is temporarily unavailable", http.StatusServiceUnavailable)
@@ -79,9 +83,9 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.writeJSON(w, http.StatusOK, robotsResponse{SourceSHA: s.sourceSHA, Robots: []robot{entry}})
-	case strings.HasPrefix(path, "robots/") && strings.HasSuffix(path, "/status"):
-		esn := strings.TrimSuffix(strings.TrimPrefix(path, "robots/"), "/status")
-		if esn == "" || strings.Contains(esn, "/") {
+	case strings.HasPrefix(path, "robots/"):
+		esn, resource, valid := bridgeRobotPath(path)
+		if !valid {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
@@ -94,17 +98,105 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "robot inventory is temporarily unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		if entry, ok := robotByESN(robots, scope); ok {
-			s.writeJSON(w, http.StatusOK, struct {
-				SourceSHA string `json:"source_sha"`
-				Robot     robot  `json:"robot"`
-			}{s.sourceSHA, entry})
+		if _, ok := robotByESN(robots, scope); !ok {
+			http.Error(w, "robot not enrolled", http.StatusNotFound)
 			return
 		}
-		http.Error(w, "robot not enrolled", http.StatusNotFound)
+		s.handleRobotResource(w, r, scope, resource)
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
+}
+
+func bridgeRobotPath(path string) (string, string, bool) {
+	parts := strings.Split(strings.TrimPrefix(path, "robots/"), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func (s *Server) handleRobotResource(w http.ResponseWriter, r *http.Request, esn, resource string) {
+	switch resource {
+	case "status":
+		if !allowMethod(w, r, http.MethodGet) {
+			return
+		}
+		robots, err := s.robots()
+		if err != nil {
+			http.Error(w, "robot inventory is temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		entry, ok := robotByESN(robots, esn)
+		if !ok {
+			http.Error(w, "robot not enrolled", http.StatusNotFound)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, struct {
+			SourceSHA string `json:"source_sha"`
+			Robot     robot  `json:"robot"`
+		}{s.sourceSHA, entry})
+	case "observation":
+		if !allowMethod(w, r, http.MethodGet) {
+			return
+		}
+		observation, err := s.observation(esn)
+		if err != nil {
+			http.Error(w, "robot observation is temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, struct {
+			SourceSHA   string                   `json:"source_sha"`
+			Observation sdkapp.HermesObservation `json:"observation"`
+		}{s.sourceSHA, observation})
+	case "commands":
+		if !allowMethod(w, r, http.MethodPost) {
+			return
+		}
+		command, err := decodeCommand(w, r)
+		if err != nil {
+			http.Error(w, "invalid command", http.StatusBadRequest)
+			return
+		}
+		result, err := s.command(esn, command)
+		if err != nil {
+			http.Error(w, "robot control is temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		s.writeJSON(w, http.StatusAccepted, struct {
+			SourceSHA string                     `json:"source_sha"`
+			Result    sdkapp.HermesCommandResult `json:"result"`
+		}{s.sourceSHA, result})
+	default:
+		http.Error(w, "not found", http.StatusNotFound)
+	}
+}
+
+func allowMethod(w http.ResponseWriter, r *http.Request, method string) bool {
+	if r.Method == method {
+		return true
+	}
+	w.Header().Set("Allow", method)
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	return false
+}
+
+func decodeCommand(w http.ResponseWriter, r *http.Request) (sdkapp.HermesCommand, error) {
+	defer r.Body.Close()
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	var command sdkapp.HermesCommand
+	if err := decoder.Decode(&command); err != nil {
+		return sdkapp.HermesCommand{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return sdkapp.HermesCommand{}, os.ErrInvalid
+	}
+	command.Action = strings.ToLower(strings.TrimSpace(command.Action))
+	if err := sdkapp.ValidateHermesCommand(command); err != nil {
+		return sdkapp.HermesCommand{}, os.ErrInvalid
+	}
+	return command, nil
 }
 
 func (s *Server) robots() ([]robot, error) {
@@ -112,6 +204,20 @@ func (s *Server) robots() ([]robot, error) {
 		return robotsFromDisk()
 	}
 	return s.snapshot()
+}
+
+func (s *Server) command(esn string, command sdkapp.HermesCommand) (sdkapp.HermesCommandResult, error) {
+	if s.control != nil {
+		return s.control(esn, command)
+	}
+	return sdkapp.HermesControl(esn, command)
+}
+
+func (s *Server) observation(esn string) (sdkapp.HermesObservation, error) {
+	if s.observe != nil {
+		return s.observe(esn)
+	}
+	return sdkapp.HermesObserve(esn)
 }
 
 func (s *Server) authorized(r *http.Request) (string, bool) {

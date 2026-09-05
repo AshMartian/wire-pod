@@ -17,6 +17,7 @@ RUN curl -fsSL --retry 3 -o /tmp/vosk.zip \
     && echo '45e95d37755deb07568e79497d7feba8c03aee5a9e071df29961aa023fd94541  /tmp/vosk.zip' | sha256sum -c - \
     && unzip -q /tmp/vosk.zip -d /opt && rm /tmp/vosk.zip
 COPY chipper/ ./
+COPY build/chipper-launcher /tmp/chipper-launcher
 ENV GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ \
     PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig \
     CGO_CFLAGS=-I/opt/vosk-linux-aarch64-0.3.45 \
@@ -26,10 +27,15 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     && mkdir -p /release/chipper /release/lib \
     && go build -mod=readonly -trimpath -buildvcs=false -tags nolibopusfile \
        -ldflags "-s -w -X github.com/kercre123/wire-pod/chipper/pkg/vars.CommitSHA=$SOURCE_SHA" \
-       -o /release/chipper/chipper ./cmd/vosk \
+       -o /release/chipper/chipper-vosk ./cmd/vosk \
+    && go build -mod=readonly -trimpath -buildvcs=false -tags nolibopusfile \
+       -ldflags "-s -w -X github.com/kercre123/wire-pod/chipper/pkg/vars.CommitSHA=$SOURCE_SHA" \
+       -o /release/chipper/chipper-whisper ./cmd/experimental/whisper \
     && cp -a webroot epod intent-data stttest.pcm weather-map.json /release/chipper/ \
+    && cp /tmp/chipper-launcher /release/chipper/chipper \
+    && chmod 0755 /release/chipper/chipper \
     && cp /opt/vosk-linux-aarch64-0.3.45/libvosk.so /release/lib/ \
-    && printf '{"source_sha":"%s","target":"linux/arm64","stt":"vosk","go":"1.22.4","vosk":"0.3.45"}\n' "$SOURCE_SHA" > /release/release.json
+    && printf '{"source_sha":"%s","target":"linux/arm64","stt":["vosk","whisper"],"go":"1.22.4","vosk":"0.3.45"}\n' "$SOURCE_SHA" > /release/release.json
 
 FROM scratch AS artifact
 COPY --from=builder /release/ /

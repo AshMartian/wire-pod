@@ -1,14 +1,17 @@
 package processreqs
 
 import (
+	"context"
 	"encoding/json"
-	"strings"
 	"regexp"
+	"strings"
+	"time"
 
 	pb "github.com/digital-dream-labs/api/go/chipperpb"
 	"github.com/kercre123/wire-pod/chipper/pkg/logger"
 	"github.com/kercre123/wire-pod/chipper/pkg/vars"
 	"github.com/kercre123/wire-pod/chipper/pkg/vtt"
+	"github.com/kercre123/wire-pod/chipper/pkg/wirepod/bridge"
 	sr "github.com/kercre123/wire-pod/chipper/pkg/wirepod/speechrequest"
 	ttr "github.com/kercre123/wire-pod/chipper/pkg/wirepod/ttr"
 	"github.com/pkg/errors"
@@ -88,6 +91,32 @@ func streamingKG(req *vtt.KnowledgeGraphRequest, speechReq sr.SpeechRequest) str
 	return ""
 }
 
+func hermesKG(req *vtt.KnowledgeGraphRequest, speechReq sr.SpeechRequest) string {
+	transcribedText, err := sttHandler(speechReq)
+	if err != nil {
+		return sendHermesKGResponse(req, "I’m sorry, I couldn’t hear that clearly. Please try again.")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
+	defer cancel()
+	answer, configured, err := bridge.HermesConversation(ctx, speechReq.Device, transcribedText)
+	if !configured {
+		return streamingKG(req, speechReq)
+	}
+	if err != nil {
+		logger.Println("Hermes knowledge request failed: " + err.Error())
+		return sendHermesKGResponse(req, "I’m sorry, I’m having trouble thinking right now. Please try again shortly.")
+	}
+	return sendHermesKGResponse(req, answer)
+}
+
+func sendHermesKGResponse(req *vtt.KnowledgeGraphRequest, spokenText string) string {
+	kg := pb.KnowledgeGraphResponse{Session: req.Session, DeviceId: req.Device, CommandType: NoResult, SpokenText: spokenText}
+	if err := req.Stream.Send(&kg); err != nil {
+		logger.Println("Hermes knowledge response failed: " + err.Error())
+	}
+	return ""
+}
+
 // Takes a SpeechRequest, figures out knowledgegraph provider, makes request, returns API response
 func KgRequest(req *vtt.KnowledgeGraphRequest, speechReq sr.SpeechRequest) string {
 	if vars.APIConfig.Knowledge.Enable {
@@ -101,7 +130,9 @@ func KgRequest(req *vtt.KnowledgeGraphRequest, speechReq sr.SpeechRequest) strin
 func (s *Server) ProcessKnowledgeGraph(req *vtt.KnowledgeGraphRequest) (*vtt.KnowledgeGraphResponse, error) {
 	InitKnowledge()
 	speechReq := sr.ReqToSpeechRequest(req)
-	if vars.APIConfig.Knowledge.Enable && vars.APIConfig.Knowledge.Provider != "houndify" {
+	if bridge.HermesConversationEnabled(speechReq.Device) {
+		hermesKG(req, speechReq)
+	} else if vars.APIConfig.Knowledge.Enable && vars.APIConfig.Knowledge.Provider != "houndify" {
 		streamingKG(req, speechReq)
 	} else {
 		apiResponse := KgRequest(req, speechReq)
@@ -131,21 +162,21 @@ func houndifyTextRequest(queryText string, device string, session string) string
 	if !vars.APIConfig.Knowledge.Enable || vars.APIConfig.Knowledge.Provider != "houndify" {
 		return "Houndify is not enabled."
 	}
-	
+
 	logger.Println("Sending text request to Houndify...")
-	
+
 	req := houndify.TextRequest{
 		Query:     queryText,
 		UserID:    device,
 		RequestID: session,
 	}
-	
+
 	serverResponse, err := HKGclient.TextSearch(req)
 	if err != nil {
 		logger.Println("Error sending text request to Houndify:", err)
 		return ""
 	}
-	
+
 	apiResponse, err := ParseSpokenResponse(serverResponse)
 	if err != nil {
 		logger.Println("Error parsing Houndify response:", err)
@@ -154,7 +185,7 @@ func houndifyTextRequest(queryText string, device string, session string) string
 	}
 
 	apiResponse = cleanHoundifyResponse(apiResponse)
-	
+
 	logger.Println("Houndify response:", apiResponse)
 	return apiResponse
 }
