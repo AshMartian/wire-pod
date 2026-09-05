@@ -55,6 +55,12 @@ func (s *JdocServer) WriteDoc(ctx context.Context, req *jdocspb.WriteDocReq) (*j
 func (s *JdocServer) ReadDocs(ctx context.Context, req *jdocspb.ReadDocsReq) (*jdocspb.ReadDocsResp, error) {
 	globalGUIDHash := `{"client_tokens":[{"hash":"J5TAnJTPRCioMExFo5KzH2fHOAXyM5fuO8YRbQSamIsNzymnJ8KDIerFxuJV4qBN","client_name":"","app_id":"","issued_at":"2022-11-26T18:23:08Z","is_primary":true}]}`
 	// global guid now only used in edge cases
+	// ReadDocs mutates the temporary session stores and can delete/write JDocs.
+	// Serialize the complete exchange so retries cannot erase a predecessor's
+	// credentials halfway through enrollment.
+	enrollmentMu.Lock()
+	defer enrollmentMu.Unlock()
+	appTokensRequest := len(req.Items) > 0 && strings.Contains(req.Items[0].DocName, "vic.AppTokens")
 
 	logger.Println("Jdocs: Incoming ReadDocs request, Robot ID: " + req.Thing + ", Item(s) to return: ")
 	logger.Println(req.Items)
@@ -78,9 +84,7 @@ func (s *JdocServer) ReadDocs(ctx context.Context, req *jdocspb.ReadDocsReq) (*j
 			break
 		}
 	}
-	if strings.Contains(req.Items[0].DocName, "vic.AppTokens") {
-		enrollmentMu.Lock()
-		defer enrollmentMu.Unlock()
+	if appTokensRequest {
 		StoreBotInfo(ctx, req.Thing)
 		_, tokenExists := vars.GetJdoc(req.Thing, "vic.AppTokens")
 		if !tokenExists {
