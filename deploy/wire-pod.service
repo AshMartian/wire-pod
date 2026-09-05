@@ -1,0 +1,37 @@
+# Managed by wire-pod scripts/pi-bootstrap.sh
+[Unit]
+Description=wire-pod Vector robot gateway
+Wants=network-online.target
+After=network-online.target
+ConditionFileIsExecutable=/opt/wire-pod/current/chipper/chipper
+
+[Service]
+Type=simple
+User=wirepod
+Group=wirepod
+WorkingDirectory=/opt/wire-pod/current/chipper
+ExecStart=/opt/wire-pod/current/chipper/chipper
+EnvironmentFile=/etc/wire-pod/wire-pod.env
+Environment=HOME=/var/lib/wire-pod
+Environment=WIREPOD_SDK_DIR=/var/lib/wire-pod/.anki_vector
+Environment=LD_LIBRARY_PATH=/opt/wire-pod/current/lib
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/wire-pod
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

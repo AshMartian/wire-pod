@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+FROM golang:1.22.4-bookworm@sha256:0c02666907338370a3272af1b4642a184968911d2317f0bd010dcef89a081d6f AS toolchain
+ENV DEBIAN_FRONTEND=noninteractive
+RUN dpkg --add-architecture arm64 && apt-get update && apt-get install -y --no-install-recommends \
+    gcc-aarch64-linux-gnu g++-aarch64-linux-gnu unzip \
+    libopus-dev libopusfile-dev libsodium-dev libasound2-dev \
+    libopus-dev:arm64 libopusfile-dev:arm64 libsodium-dev:arm64 libasound2-dev:arm64 \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM toolchain AS builder
+ARG SOURCE_SHA
+WORKDIR /src/chipper
+COPY chipper/go.mod chipper/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+RUN curl -fsSL --retry 3 -o /tmp/vosk.zip \
+    https://github.com/alphacep/vosk-api/releases/download/v0.3.45/vosk-linux-aarch64-0.3.45.zip \
+    && echo '45e95d37755deb07568e79497d7feba8c03aee5a9e071df29961aa023fd94541  /tmp/vosk.zip' | sha256sum -c - \
+    && unzip -q /tmp/vosk.zip -d /opt && rm /tmp/vosk.zip
+COPY chipper/ ./
+ENV GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ \
+    PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig \
+    CGO_CFLAGS=-I/opt/vosk-linux-aarch64-0.3.45 \
+    CGO_LDFLAGS=-L/opt/vosk-linux-aarch64-0.3.45
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    test -n "$SOURCE_SHA" && test "${#SOURCE_SHA}" = 40 \
+    && mkdir -p /release/chipper /release/lib \
+    && go build -mod=readonly -trimpath -buildvcs=false -tags nolibopusfile \
+       -ldflags "-s -w -X github.com/kercre123/wire-pod/chipper/pkg/vars.CommitSHA=$SOURCE_SHA" \
+       -o /release/chipper/chipper ./cmd/vosk \
+    && cp -a webroot epod intent-data stttest.pcm weather-map.json /release/chipper/ \
+    && cp /opt/vosk-linux-aarch64-0.3.45/libvosk.so /release/lib/ \
+    && printf '{"source_sha":"%s","target":"linux/arm64","stt":"vosk","go":"1.22.4","vosk":"0.3.45"}\n' "$SOURCE_SHA" > /release/release.json
+
+FROM scratch AS artifact
+COPY --from=builder /release/ /

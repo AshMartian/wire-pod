@@ -41,3 +41,5 @@
 /whisper.cpp
 .DS_Store
 /chipper/openaiChats.json
+/artifacts/
+__pycache__/

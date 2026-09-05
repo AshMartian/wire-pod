@@ -225,6 +225,13 @@ func Init() {
 			SDKIniPath = "/tmp/.anki_vector/"
 		}
 	}
+	// Native releases keep SDK credentials outside their immutable release tree.
+	if sdkDir := os.Getenv("WIREPOD_SDK_DIR"); sdkDir != "" {
+		if !filepath.IsAbs(sdkDir) {
+			panic("WIREPOD_SDK_DIR must be an absolute path")
+		}
+		SDKIniPath = filepath.Clean(sdkDir) + string(os.PathSeparator)
+	}
 	logger.Println("SDK info path: " + SDKIniPath)
 
 	// load api config (config.go)

@@ -12,6 +12,7 @@ import (
 	"github.com/digital-dream-labs/api/go/jdocspb"
 	"github.com/digital-dream-labs/api/go/tokenpb"
 	"github.com/digital-dream-labs/hugh/log"
+	"github.com/kercre123/wire-pod/chipper/pkg/health"
 	"github.com/kercre123/wire-pod/chipper/pkg/logger"
 	"github.com/kercre123/wire-pod/chipper/pkg/mdnshandler"
 	chipperserver "github.com/kercre123/wire-pod/chipper/pkg/servers/chipper"
@@ -38,6 +39,7 @@ var voiceProcessor *wp.Server
 
 // grpcServer *grpc.Servervar
 var chipperServing bool = false
+var serviceHealth *health.State
 
 func serveOk(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "ok")
@@ -85,9 +87,17 @@ func BeginWirepodSpecific(sttInitFunc func() error, sttHandlerFunc interface{}, 
 
 	// begin wirepod stuff
 	vars.Init()
+	serviceHealth = health.New(vars.CommitSHA)
+	serviceHealth.Register(http.DefaultServeMux)
+	initSpeech := func() error {
+		serviceHealth.Speech(vars.APIConfig.PastInitialSetup, false)
+		err := sttInitFunc()
+		serviceHealth.Speech(vars.APIConfig.PastInitialSetup, err == nil)
+		return err
+	}
 	var err error
-	voiceProcessor, err = wp.New(sttInitFunc, sttHandlerFunc, voiceProcessorName)
-	wpweb.SttInitFunc = sttInitFunc
+	voiceProcessor, err = wp.New(initSpeech, sttHandlerFunc, voiceProcessorName)
+	wpweb.SttInitFunc = initSpeech
 	go sdkWeb.BeginServer()
 	http.HandleFunc("/api-chipper/", ChipperHTTPApi)
 	if err != nil {
@@ -110,6 +120,7 @@ func StartFromProgramInit(sttInitFunc func() error, sttHandlerFunc interface{}, 
 		logger.Println("\033[33m\033[1mLanguage value is blank, but STT service is " + vars.APIConfig.STT.Service + ". Reinitiating setup process.\033[0m")
 		logger.Println("\033[33m\033[1mWire-pod is not setup. Use the webserver at port 8080 to set up wire-pod.\033[0m")
 		vars.APIConfig.PastInitialSetup = false
+		serviceHealth.Speech(false, false)
 	} else {
 		go StartChipper()
 	}
@@ -118,6 +129,7 @@ func StartFromProgramInit(sttInitFunc func() error, sttHandlerFunc interface{}, 
 }
 
 func RestartServer() {
+	serviceHealth.BeginListener()
 	if chipperServing {
 		serverOne.Close()
 		serverTwo.Close()
@@ -128,6 +140,7 @@ func RestartServer() {
 }
 
 func StopServer() {
+	serviceHealth.BeginListener()
 	if chipperServing {
 		serverOne.Close()
 		serverTwo.Close()
@@ -137,6 +150,7 @@ func StopServer() {
 }
 
 func StartChipper() {
+	generation := serviceHealth.BeginListener()
 	// load certs
 	if vars.APIConfig.Server.EPConfig && runtime.GOOS != "android" {
 		go mdnshandler.PostmDNS()
@@ -216,15 +230,21 @@ func StartChipper() {
 	fmt.Println("\033[33m\033[1mwire-pod started successfully!\033[0m")
 
 	chipperServing = true
+	serviceHealth.Listener(generation, true)
+	defer serviceHealth.Listener(generation, false)
+	primary, secondary := serverOne, serverTwo
 	if vars.APIConfig.Server.EPConfig && os.Getenv("NO8084") != "true" {
 		if runtime.GOOS != "android" {
-			go serverOne.Serve()
+			go func() {
+				primary.Serve()
+				serviceHealth.Listener(generation, false)
+			}()
 		}
-		serverTwo.Serve()
+		secondary.Serve()
 		logger.Println("Stopping chipper server")
 		chipperServing = false
 	} else {
-		serverOne.Serve()
+		primary.Serve()
 		logger.Println("Stopping chipper server")
 		chipperServing = false
 	}
