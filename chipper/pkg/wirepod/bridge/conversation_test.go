@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,6 +32,64 @@ func TestHermesConversationUsesScopedDailySessionAndMemoryKey(t *testing.T) {
 	answer, configured, err := HermesConversation(context.Background(), "ESN-A", "hello")
 	if err != nil || !configured || answer != "Hello from your own daily session." {
 		t.Fatalf("conversation failed: configured=%v err=%v answer=%q", configured, err, answer)
+	}
+}
+
+func TestHermesConversationStreamEmitsBoundedSentenceChunks(t *testing.T) {
+	const key = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Stream       bool `json:"stream"`
+			ModelOptions struct {
+				Reasoning conversationReasoning `json:"reasoning"`
+			} `json:"model_options"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || !request.Stream || request.ModelOptions.Reasoning != (conversationReasoning{Enabled: true, Effort: "low"}) {
+			http.Error(w, "streaming was not requested", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"Hello "}}]}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"from Vector. How"}}]}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":" are you?"}}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+	t.Setenv(hermesConversationEnv, `{"esn-a":{"url":"`+server.URL+`","key":"`+key+`","model":"vector-n8a4"}}`)
+	var chunks []string
+	answer, configured, streamed, err := HermesConversationStream(context.Background(), "esn-a", "hello", func(chunk string) error {
+		chunks = append(chunks, chunk)
+		return nil
+	})
+	if err != nil || !configured || !streamed {
+		t.Fatalf("stream failed: configured=%v streamed=%v err=%v", configured, streamed, err)
+	}
+	if answer != "Hello from Vector. How are you?" {
+		t.Fatalf("unexpected answer: %q", answer)
+	}
+	if got, want := strings.Join(chunks, "|"), "Hello from Vector.|How are you?"; got != want {
+		t.Fatalf("unexpected chunks: got %q, want %q", got, want)
+	}
+	for _, chunk := range chunks {
+		if len([]rune(chunk)) > 280 {
+			t.Fatalf("chunk exceeds Vector speech limit: %d", len([]rune(chunk)))
+		}
+	}
+}
+
+func TestHermesSentenceChunkerBoundsUnpunctuatedOutput(t *testing.T) {
+	chunker := newHermesSentenceChunker()
+	text := strings.Repeat("x", 281)
+	chunks := chunker.push(text)
+	chunks = append(chunks, chunker.finish()...)
+	if got, want := len(chunks), 2; got != want {
+		t.Fatalf("unexpected chunk count: got %d, want %d", got, want)
+	}
+	if got, want := len([]rune(chunks[0])), 280; got != want {
+		t.Fatalf("first chunk length: got %d, want %d", got, want)
+	}
+	if got, want := chunks[1], "x"; got != want {
+		t.Fatalf("second chunk: got %q, want %q", got, want)
 	}
 }
 

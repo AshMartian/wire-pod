@@ -74,27 +74,47 @@ func (s *Server) ProcessIntent(req *vtt.IntentRequest) (*vtt.IntentResponse, err
 func replyFromHermesIntent(serial, text string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
 	defer cancel()
-	answer, configured, err := bridge.HermesConversation(ctx, serial, text)
+	spokeChunk := false
+	answer, configured, streamed, err := bridge.HermesConversationStream(ctx, serial, text, func(chunk string) error {
+		if err := speakHermesIntentReply(serial, chunk); err != nil {
+			logger.Println("Hermes intent chunk speech failed: " + err.Error())
+			return nil
+		}
+		spokeChunk = true
+		return nil
+	})
 	if !configured {
 		return false
 	}
 	if err != nil {
 		logger.Println("Hermes intent request failed: " + err.Error())
-		speakHermesIntentReply(serial, "I’m sorry, I’m having trouble thinking right now. Please try again shortly.")
+		if !spokeChunk {
+			if speakErr := speakHermesIntentReply(serial, "I’m sorry, I’m having trouble thinking right now. Please try again shortly."); speakErr != nil {
+				logger.Println("Hermes intent fallback speech failed: " + speakErr.Error())
+			}
+		}
 		return true
 	}
-	speakHermesIntentReply(serial, answer)
+	// A non-streaming Hermes response has not been spoken by the callback.
+	// A stream which only carried non-content metadata likewise falls back to
+	// the completed answer instead of leaving Vector silent.
+	if !streamed || !spokeChunk {
+		if speakErr := speakHermesIntentReply(serial, answer); speakErr != nil {
+			logger.Println("Hermes intent speech failed: " + speakErr.Error())
+		}
+	}
 	return true
 }
 
-func speakHermesIntentReply(serial, text string) {
+func speakHermesIntentReply(serial, text string) error {
 	text = boundedHermesSpeech(text)
 	if text == "" {
-		return
+		return nil
 	}
 	if _, err := sdkapp.HermesControl(serial, sdkapp.HermesCommand{Action: "say", Text: text}); err != nil {
-		logger.Println("Hermes intent speech failed: " + err.Error())
+		return err
 	}
+	return nil
 }
 
 func boundedHermesSpeech(text string) string {
