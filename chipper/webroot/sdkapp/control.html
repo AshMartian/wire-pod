@@ -236,6 +236,7 @@
           document.getElementById("assume_control").checked = true;
           sendForm('/api-sdk/assume_behavior_control?priority=high');
         } else {
+          stopAllMotion();
           document.getElementById("release_control").checked = true;
           sendForm('/api-sdk/release_behavior_control');
         }
@@ -379,6 +380,21 @@
         }
       }
 
+      // Keep every control surface on the same emergency-stop path. This is
+      // deliberately unconditional: a pointer may have stopped reporting
+      // before the page learns that control was released or hidden.
+      function stopAllMotion() {
+        padPointer = null;
+        currentDir = "stopping";
+        setDir(null);
+        sendForm("/api-sdk/move_lift?speed=0");
+        sendForm("/api-sdk/move_head?speed=0");
+        document.querySelectorAll(".pad-btn.held").forEach(function (btn) {
+          if (typeof btn._vcStop === "function") btn._vcStop();
+          else btn.classList.remove("held");
+        });
+      }
+
       dpad.addEventListener("pointerdown", function (e) {
         e.preventDefault();
         if (!controlActive) { nudgeControl(); return; }
@@ -389,6 +405,11 @@
       dpad.addEventListener("pointermove", function (e) {
         if (e.pointerId !== padPointer) return;
         e.preventDefault();
+        if (!controlActive) {
+          padPointer = null;
+          stopAllMotion();
+          return;
+        }
         setDir(dirFromEvent(e));
       });
       function padRelease(e) {
@@ -398,14 +419,14 @@
       }
       dpad.addEventListener("pointerup", padRelease);
       dpad.addEventListener("pointercancel", padRelease);
+      dpad.addEventListener("lostpointercapture", padRelease);
       dpad.addEventListener("contextmenu", function (e) { e.preventDefault(); });
 
       /* safety: any surprise (tab hidden, etc.) → full stop */
       document.addEventListener("visibilitychange", function () {
         if (document.hidden && controlActive) {
-          setDir(null);
-          sendForm("/api-sdk/move_lift?speed=0");
-          sendForm("/api-sdk/move_head?speed=0");
+          useKeyboardControl = false;
+          stopAllMotion();
         }
       });
 
@@ -437,9 +458,11 @@
           btn.classList.remove("held");
           sendForm(act.stop);
         }
+        btn._vcStop = stop;
         btn.addEventListener("pointerdown", start);
         btn.addEventListener("pointerup", stop);
         btn.addEventListener("pointercancel", stop);
+        btn.addEventListener("lostpointercapture", stop);
         btn.addEventListener("contextmenu", function (e) { e.preventDefault(); });
       });
 
@@ -447,9 +470,7 @@
          releases behavior control via its own onbeforeunload) */
       window.addEventListener("pagehide", function () {
         if (controlActive) {
-          sendForm("/api-sdk/move_wheels?lw=0&rw=0");
-          sendForm("/api-sdk/move_lift?speed=0");
-          sendForm("/api-sdk/move_head?speed=0");
+          stopAllMotion();
         }
       });
 
