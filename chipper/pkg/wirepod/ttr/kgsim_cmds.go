@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
@@ -175,60 +174,54 @@ func CreatePrompt(origPrompt string, model string, isKG bool) string {
 }
 
 func GetActionsFromString(input string) []RobotAction {
-	splitInput := strings.Split(input, "{{")
-	if len(splitInput) == 1 {
+	if !strings.Contains(input, "{{") {
 		return []RobotAction{
 			{
 				Action:    ActionSayText,
-				Parameter: stripCommandStems(input),
+				Parameter: input,
 			},
 		}
 	}
 	var actions []RobotAction
-	for _, spl := range splitInput {
-		if strings.TrimSpace(spl) == "" {
+	appendSpeech := func(text string) {
+		if text = strings.TrimSpace(text); text != "" {
+			actions = append(actions, RobotAction{Action: ActionSayText, Parameter: text})
+		}
+	}
+
+	for {
+		start := strings.Index(input, "{{")
+		if start == -1 {
+			appendSpeech(input)
+			break
+		}
+		appendSpeech(input[:start])
+		input = input[start+2:]
+		end := strings.IndexByte(input, '}')
+		if end == -1 {
+			// An unfinished tag must not become spoken command text.
+			break
+		}
+		inner := input[:end]
+		input = input[end:]
+		closingBraces := len(input) - len(strings.TrimLeft(input, "}"))
+		input = input[closingBraces:]
+
+		// Only a complete, non-nested command with one non-empty parameter
+		// may execute. Consume malformed tags, but preserve speech after them.
+		if closingBraces != 2 || strings.ContainsAny(inner, "{}") || strings.Count(inner, "||") != 1 {
 			continue
 		}
-		if !strings.Contains(spl, "}}") {
-			action := RobotAction{
-				Action:    ActionSayText,
-				Parameter: stripCommandStems(strings.TrimSpace(spl)),
-			}
+		cmdPlusParam := strings.SplitN(inner, "||", 2)
+		cmd, param := strings.TrimSpace(cmdPlusParam[0]), strings.TrimSpace(cmdPlusParam[1])
+		if cmd == "" || param == "" {
+			continue
+		}
+		if action := CmdParamToAction(cmd, param); action.Action != -1 {
 			actions = append(actions, action)
-			continue
-		}
-
-		inner := strings.TrimSpace(strings.Split(spl, "}}")[0])
-		cmdPlusParam := strings.Split(inner, "||")
-		cmd := strings.TrimSpace(cmdPlusParam[0])
-		if len(cmdPlusParam) >= 2 {
-			param := strings.TrimSpace(cmdPlusParam[1])
-			action := CmdParamToAction(cmd, param)
-			if action.Action != -1 {
-				actions = append(actions, action)
-			}
-		}
-
-		afterParts := strings.SplitN(spl, "}}", 2)
-		if len(afterParts) == 2 {
-			spoken := stripCommandStems(strings.TrimSpace(afterParts[1]))
-			if spoken != "" {
-				action := RobotAction{
-					Action:    ActionSayText,
-					Parameter: spoken,
-				}
-				actions = append(actions, action)
-			}
 		}
 	}
 	return actions
-}
-
-// stripCommandStems removes any leaked command keywords or malformed tag
-// debris that slipped past the {{ }} parser, so they are never spoken aloud.
-func stripCommandStems(s string) string {
-	re := regexp.MustCompile(`\{\{[^}]*\}?\}?|(playAnimationWI|playAnimation|getImage|newVoiceRequest)\w*`)
-	return strings.TrimSpace(re.ReplaceAllString(s, ""))
 }
 
 func CmdParamToAction(cmd, param string) RobotAction {
