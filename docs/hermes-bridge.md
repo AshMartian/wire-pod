@@ -59,7 +59,7 @@ The command body is one of:
 {"action":"stop"}
 ```
 
-Wheel speeds are limited to ±200 mm/s; head/lift speeds to ±2 rad/s; moving commands run from 50–2000 ms and automatically receive a stop. `stop` also invalidates an older scheduled stop. These are wheel controls, not autonomous navigation: named locations need an explicit map/pose safety contract before they are exposed.
+Wheel speeds are limited to ±200 mm/s; head/lift speeds to ±2 rad/s; moving commands run from 50–2000 ms and receive their stop before the default-priority Vector behavior-control lease is released. Commands are serialized per WirePod process, so a newer action cannot cancel another axis's safety stop. These are wheel controls, not autonomous navigation: named locations need an explicit map/pose safety contract before they are exposed.
 
 ## Identity and memory
 

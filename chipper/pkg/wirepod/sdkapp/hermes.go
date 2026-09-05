@@ -38,11 +38,12 @@ type HermesObservation struct {
 
 var hermesControl = struct {
 	sync.Mutex
-	generation map[string]map[string]uint64
-}{generation: make(map[string]map[string]uint64)}
+}{}
 
 const (
-	hermesCommandTimeout = 5 * time.Second
+	hermesObserveTimeout = 5 * time.Second
+	hermesSpeechTimeout  = 20 * time.Second
+	hermesMotionTimeout  = 8 * time.Second
 	maxHermesWheelMMPS   = 200
 	maxHermesMotionMS    = 2000
 	maxHermesJointRadPS  = 2
@@ -60,7 +61,7 @@ func HermesObserve(serial string) (HermesObservation, error) {
 	if err != nil {
 		return HermesObservation{}, err
 	}
-	ctx, cancel := context.WithTimeout(robot.Ctx, hermesCommandTimeout)
+	ctx, cancel := context.WithTimeout(robot.Ctx, hermesObserveTimeout)
 	defer cancel()
 	battery, err := robot.Vector.Conn.BatteryState(ctx, &vectorpb.BatteryStateRequest{})
 	if err != nil {
@@ -95,62 +96,77 @@ func HermesControl(serial string, command HermesCommand) (HermesCommandResult, e
 	if err != nil {
 		return HermesCommandResult{}, err
 	}
-	ctx, cancel := context.WithTimeout(robot.Ctx, hermesCommandTimeout)
-	defer cancel()
 	action := strings.ToLower(strings.TrimSpace(command.Action))
 	if err := ValidateHermesCommand(command); err != nil {
 		return HermesCommandResult{}, err
 	}
+	timeout := hermesMotionTimeout
+	if action == "say" {
+		timeout = hermesSpeechTimeout
+	}
+	ctx, cancel := context.WithTimeout(robot.Ctx, timeout)
+	defer cancel()
 	switch action {
 	case "say":
 		text := strings.TrimSpace(command.Text)
 		if text == "" || len([]rune(text)) > 280 {
 			return HermesCommandResult{}, fmt.Errorf("speech must contain 1 through 280 characters")
 		}
-		_, err = robot.Vector.Conn.SayText(ctx, &vectorpb.SayTextRequest{DurationScalar: 1, UseVectorVoice: true, Text: text})
+		err = withHermesBehaviorControl(ctx, robot, func(actionCtx context.Context) error {
+			_, actionErr := robot.Vector.Conn.SayText(actionCtx, &vectorpb.SayTextRequest{DurationScalar: 1, UseVectorVoice: true, Text: text})
+			return actionErr
+		})
 		return HermesCommandResult{Action: action}, err
 	case "drive":
 		if !validMotion(command.LeftWheelMMPS, command.RightWheelMMPS, command.DurationMS) {
 			return HermesCommandResult{}, fmt.Errorf("drive values exceed the bounded control range")
 		}
-		err = driveWheels(ctx, robot, command.LeftWheelMMPS, command.RightWheelMMPS)
-		if err == nil {
-			scheduleHermesStop(serial, "drive", command.DurationMS, func(stopCtx context.Context) error { return driveWheels(stopCtx, robot, 0, 0) })
-		}
+		err = withHermesBehaviorControl(ctx, robot, func(actionCtx context.Context) error {
+			if actionErr := driveWheels(actionCtx, robot, command.LeftWheelMMPS, command.RightWheelMMPS); actionErr != nil {
+				return actionErr
+			}
+			return waitThenStop(actionCtx, command.DurationMS, func(stopCtx context.Context) error { return driveWheels(stopCtx, robot, 0, 0) })
+		})
 		return HermesCommandResult{Action: action, StopScheduled: err == nil}, err
 	case "head":
 		if !validJointMotion(command.SpeedRadPerSec, command.DurationMS) {
 			return HermesCommandResult{}, fmt.Errorf("head values exceed the bounded control range")
 		}
-		_, err = robot.Vector.Conn.MoveHead(ctx, &vectorpb.MoveHeadRequest{SpeedRadPerSec: float32(command.SpeedRadPerSec)})
-		if err == nil {
-			scheduleHermesStop(serial, "head", command.DurationMS, func(stopCtx context.Context) error {
+		err = withHermesBehaviorControl(ctx, robot, func(actionCtx context.Context) error {
+			if _, actionErr := robot.Vector.Conn.MoveHead(actionCtx, &vectorpb.MoveHeadRequest{SpeedRadPerSec: float32(command.SpeedRadPerSec)}); actionErr != nil {
+				return actionErr
+			}
+			return waitThenStop(actionCtx, command.DurationMS, func(stopCtx context.Context) error {
 				_, stopErr := robot.Vector.Conn.MoveHead(stopCtx, &vectorpb.MoveHeadRequest{})
 				return stopErr
 			})
-		}
+		})
 		return HermesCommandResult{Action: action, StopScheduled: err == nil}, err
 	case "lift":
 		if !validJointMotion(command.SpeedRadPerSec, command.DurationMS) {
 			return HermesCommandResult{}, fmt.Errorf("lift values exceed the bounded control range")
 		}
-		_, err = robot.Vector.Conn.MoveLift(ctx, &vectorpb.MoveLiftRequest{SpeedRadPerSec: float32(command.SpeedRadPerSec)})
-		if err == nil {
-			scheduleHermesStop(serial, "lift", command.DurationMS, func(stopCtx context.Context) error {
+		err = withHermesBehaviorControl(ctx, robot, func(actionCtx context.Context) error {
+			if _, actionErr := robot.Vector.Conn.MoveLift(actionCtx, &vectorpb.MoveLiftRequest{SpeedRadPerSec: float32(command.SpeedRadPerSec)}); actionErr != nil {
+				return actionErr
+			}
+			return waitThenStop(actionCtx, command.DurationMS, func(stopCtx context.Context) error {
 				_, stopErr := robot.Vector.Conn.MoveLift(stopCtx, &vectorpb.MoveLiftRequest{})
 				return stopErr
 			})
-		}
+		})
 		return HermesCommandResult{Action: action, StopScheduled: err == nil}, err
 	case "stop":
-		invalidateHermesStops(serial, "drive", "head", "lift")
-		err = driveWheels(ctx, robot, 0, 0)
-		if err == nil {
-			_, err = robot.Vector.Conn.MoveHead(ctx, &vectorpb.MoveHeadRequest{})
-		}
-		if err == nil {
-			_, err = robot.Vector.Conn.MoveLift(ctx, &vectorpb.MoveLiftRequest{})
-		}
+		err = withHermesBehaviorControl(ctx, robot, func(actionCtx context.Context) error {
+			if actionErr := driveWheels(actionCtx, robot, 0, 0); actionErr != nil {
+				return actionErr
+			}
+			if _, actionErr := robot.Vector.Conn.MoveHead(actionCtx, &vectorpb.MoveHeadRequest{}); actionErr != nil {
+				return actionErr
+			}
+			_, actionErr := robot.Vector.Conn.MoveLift(actionCtx, &vectorpb.MoveLiftRequest{})
+			return actionErr
+		})
 		return HermesCommandResult{Action: action}, err
 	default:
 		return HermesCommandResult{}, fmt.Errorf("unsupported Hermes action")
@@ -201,30 +217,39 @@ func driveWheels(ctx context.Context, robot Robot, left, right int) error {
 	return err
 }
 
-func scheduleHermesStop(serial, axis string, durationMS int, stop func(context.Context) error) {
-	generation := nextHermesGeneration(serial, axis)
-	time.AfterFunc(time.Duration(durationMS)*time.Millisecond, func() {
-		hermesControl.Lock()
-		defer hermesControl.Unlock()
-		if hermesControl.generation[serial][axis] != generation {
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), hermesCommandTimeout)
-		defer cancel()
-		_ = stop(ctx)
-	})
-}
-
-func nextHermesGeneration(serial, axis string) uint64 {
-	if hermesControl.generation[serial] == nil {
-		hermesControl.generation[serial] = make(map[string]uint64)
+func withHermesBehaviorControl(ctx context.Context, robot Robot, action func(context.Context) error) (result error) {
+	stream, err := robot.Vector.Conn.BehaviorControl(ctx)
+	if err != nil {
+		return err
 	}
-	hermesControl.generation[serial][axis]++
-	return hermesControl.generation[serial][axis]
+	if err = stream.Send(&vectorpb.BehaviorControlRequest{RequestType: &vectorpb.BehaviorControlRequest_ControlRequest{ControlRequest: &vectorpb.ControlRequest{Priority: vectorpb.ControlRequest_DEFAULT}}}); err != nil {
+		return err
+	}
+	for {
+		response, receiveErr := stream.Recv()
+		if receiveErr != nil {
+			return receiveErr
+		}
+		if response.GetControlGrantedResponse() != nil {
+			break
+		}
+	}
+	defer func() {
+		releaseErr := stream.Send(&vectorpb.BehaviorControlRequest{RequestType: &vectorpb.BehaviorControlRequest_ControlRelease{ControlRelease: &vectorpb.ControlRelease{}}})
+		if result == nil && releaseErr != nil {
+			result = releaseErr
+		}
+	}()
+	return action(ctx)
 }
 
-func invalidateHermesStops(serial string, axes ...string) {
-	for _, axis := range axes {
-		_ = nextHermesGeneration(serial, axis)
+func waitThenStop(ctx context.Context, durationMS int, stop func(context.Context) error) error {
+	timer := time.NewTimer(time.Duration(durationMS) * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return stop(ctx)
 	}
 }
