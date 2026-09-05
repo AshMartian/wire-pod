@@ -25,6 +25,10 @@ func (s *Server) ProcessIntentGraph(req *vtt.IntentGraphRequest) (*vtt.IntentGra
 			ttr.IntentPass(req, "intent_system_noaudio", "", map[string]string{}, false)
 			return nil, nil
 		}
+		if replyFromHermesIntent(speechReq.Device, transcribedText) {
+			ttr.IntentPass(req, "intent_knowledge_promptquestion", transcribedText, map[string]string{}, false)
+			return nil, nil
+		}
 		successMatched = ttr.ProcessTextAll(req, transcribedText, vars.IntentList, speechReq.IsOpus)
 	} else {
 		intent, slots, err := stiHandler(speechReq)
