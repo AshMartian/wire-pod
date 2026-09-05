@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"strings"
 	"path/filepath"
+	"strings"
+	"sync"
 
 	"github.com/digital-dream-labs/api/go/jdocspb"
 	"github.com/kercre123/wire-pod/chipper/pkg/logger"
@@ -17,6 +18,10 @@ import (
 type JdocServer struct {
 	jdocspb.UnimplementedJdocsServer
 }
+
+// Enrollment exchanges arrive in short bursts. Serializing the AppTokens
+// transition makes a retry observe the token JDoc written by its predecessor.
+var enrollmentMu sync.Mutex
 
 func (s *JdocServer) WriteDoc(ctx context.Context, req *jdocspb.WriteDocReq) (*jdocspb.WriteDocResp, error) {
 	logger.Println("Jdocs: Incoming WriteDoc request, Item to write: " + req.DocName + ", Robot ID: " + req.Thing)
@@ -74,35 +79,35 @@ func (s *JdocServer) ReadDocs(ctx context.Context, req *jdocspb.ReadDocsReq) (*j
 		}
 	}
 	if strings.Contains(req.Items[0].DocName, "vic.AppTokens") {
+		enrollmentMu.Lock()
+		defer enrollmentMu.Unlock()
 		StoreBotInfo(ctx, req.Thing)
 		_, tokenExists := vars.GetJdoc(req.Thing, "vic.AppTokens")
 		if !tokenExists {
 			logger.Println("App tokens jdoc not found for this bot, trying bots in TokenHashStore")
 			matched := false
 			botGUID := ""
-			for num, pair := range tokenserver.TokenHashStore {
-				if strings.EqualFold(pair[0], ipAddr) {
-					err := tokenserver.WriteTokenHash(strings.ToLower(strings.TrimSpace(esn)), pair[2])
-					if err != nil {
-						logger.Println("Error writing token hash to vic.AppTokens")
-						logger.Println(err)
-					}
-					err = tokenserver.SetBotGUID(esn, pair[1], pair[2])
-					botGUID = pair[1]
-					if err != nil {
-						logger.Println("Error writing token hash to " + vars.BotInfoPath)
-						logger.Println(err)
-					}
-					logger.Println("ReadJdocs: bot " + esn + " matched with IP " + ipAddr + " in token store")
-					matched = true
-					tokenserver.RemoveFromPrimaryStore(num)
+			if pairs := tokenserver.TakePrimaryTokens(ipAddr); len(pairs) > 0 {
+				pair := pairs[len(pairs)-1]
+				err := tokenserver.WriteTokenHash(strings.ToLower(strings.TrimSpace(esn)), pair[2])
+				if err != nil {
+					logger.Println("Error writing token hash to vic.AppTokens")
+					logger.Println(err)
 				}
+				err = tokenserver.SetBotGUID(esn, pair[1], pair[2])
+				botGUID = pair[1]
+				if err != nil {
+					logger.Println("Error writing token hash to " + vars.BotInfoPath)
+					logger.Println(err)
+				}
+				logger.Println("ReadJdocs: bot " + esn + " matched with IP " + ipAddr + " in token store")
+				matched = true
 			}
 			sessionMatched := false
 			for num, pair := range tokenserver.SessionWriteStoreNames {
 				if strings.EqualFold(ipAddr, strings.Split(pair[0], ":")[0]) {
 					sessionMatched = true
-					fullPath := filepath.Join(vars.SDKIniPath, pair[1] + "-" + esn + ".cert")
+					fullPath := filepath.Join(vars.SDKIniPath, pair[1]+"-"+esn+".cert")
 					if _, err := os.Stat(vars.SDKIniPath); err != nil {
 						logger.Println("Creating " + vars.SDKIniPath + " directory")
 						os.Mkdir(vars.SDKIniPath, 0755)

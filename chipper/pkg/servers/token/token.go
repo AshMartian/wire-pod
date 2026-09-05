@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/digital-dream-labs/api/go/tokenpb"
@@ -35,6 +36,7 @@ var (
 // array of {"target", "guid", "guidhash"}
 // for primary user auth
 var TokenHashStore [][3]string
+var temporaryStoreMu sync.Mutex
 
 // array of {"esn", "target", "guid", "guidhash"}
 // for secondary user auth
@@ -134,8 +136,40 @@ func RemoveFromSecondStore(index int) {
 }
 
 func RemoveFromPrimaryStore(index int) {
+	temporaryStoreMu.Lock()
+	defer temporaryStoreMu.Unlock()
+	if index < 0 || index >= len(TokenHashStore) {
+		logger.Println("Ignoring stale temporary token-hash store index")
+		return
+	}
 	logger.Println("Removing " + TokenHashStore[index][0] + " from temporary token-hash store")
 	TokenHashStore = append(TokenHashStore[:index], TokenHashStore[index+1:]...)
+}
+
+// TakePrimaryTokens drains every pending primary token for an IP in one
+// critical section. A Vector may retry association before it reads JDocs; the
+// caller selects the final grant, which matches the existing latest-write-wins
+// JDoc behavior.
+func TakePrimaryTokens(ipAddr string) [][3]string {
+	temporaryStoreMu.Lock()
+	defer temporaryStoreMu.Unlock()
+	claimed := make([][3]string, 0)
+	remaining := make([][3]string, 0, len(TokenHashStore))
+	for _, pair := range TokenHashStore {
+		if strings.EqualFold(pair[0], ipAddr) {
+			claimed = append(claimed, pair)
+		} else {
+			remaining = append(remaining, pair)
+		}
+	}
+	TokenHashStore = remaining
+	return claimed
+}
+
+func AddPrimaryToken(pair [3]string) {
+	temporaryStoreMu.Lock()
+	defer temporaryStoreMu.Unlock()
+	TokenHashStore = append(TokenHashStore, pair)
 }
 
 func RemoveFromSessionStore(index int) {
@@ -234,7 +268,7 @@ func CreateJWT(ctx context.Context, skipGuid bool, isPrimary bool) *tokenpb.Toke
 		if !skipGuid {
 			logger.Println("Adding " + ipAddr + " to TokenHashStore")
 			guid, tokenHash, _ := CreateTokenAndHashedToken()
-			TokenHashStore = append(TokenHashStore, [3]string{ipAddr, guid, tokenHash})
+			AddPrimaryToken([3]string{ipAddr, guid, tokenHash})
 			clientToken = guid
 		}
 	}
