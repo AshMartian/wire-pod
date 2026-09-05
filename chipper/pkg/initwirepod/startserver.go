@@ -19,6 +19,7 @@ import (
 	jdocsserver "github.com/kercre123/wire-pod/chipper/pkg/servers/jdocs"
 	tokenserver "github.com/kercre123/wire-pod/chipper/pkg/servers/token"
 	"github.com/kercre123/wire-pod/chipper/pkg/vars"
+	"github.com/kercre123/wire-pod/chipper/pkg/wirepod/bridge"
 	wpweb "github.com/kercre123/wire-pod/chipper/pkg/wirepod/config-ws"
 	wp "github.com/kercre123/wire-pod/chipper/pkg/wirepod/preqs"
 	sdkWeb "github.com/kercre123/wire-pod/chipper/pkg/wirepod/sdkapp"
@@ -89,6 +90,7 @@ func BeginWirepodSpecific(sttInitFunc func() error, sttHandlerFunc interface{}, 
 	vars.Init()
 	serviceHealth = health.New(vars.CommitSHA)
 	serviceHealth.Register(http.DefaultServeMux)
+	bridge.RegisterFromEnv(http.DefaultServeMux, vars.CommitSHA)
 	initSpeech := func() error {
 		serviceHealth.Speech(vars.APIConfig.PastInitialSetup, false)
 		err := sttInitFunc()

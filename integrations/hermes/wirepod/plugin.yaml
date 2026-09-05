@@ -1,0 +1,23 @@
+name: wirepod
+version: "0.1.0"
+description: Profile-bound, read-only status access for one enrolled Vector.
+manifest_version: 2
+api_version: 1
+tags: [wirepod, vector, robot]
+config_schema:
+  bridge_url:
+    type: str
+    default: ""
+    description: "Base URL of the wire-pod bridge, for example http://escapepod.local:8080"
+  bridge_token:
+    type: str
+    default: ""
+    description: "Bearer token shared only with this Vector profile"
+  vector_esn:
+    type: str
+    default: ""
+    description: "The one Vector ESN this profile is allowed to inspect"
+  timeout_seconds:
+    type: int
+    default: 5
+    description: "Bridge socket-inactivity timeout in seconds, from 1 through 15"
