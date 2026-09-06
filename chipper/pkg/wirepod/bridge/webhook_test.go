@@ -45,7 +45,7 @@ func TestWebhookForwarderSignsReplayResistantPayload(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer server.Close()
-	forwarder := newWebhookForwarder(webhookTarget{URL: server.URL, Secret: secret})
+	forwarder := newWebhookForwarder(webhookTarget{URL: server.URL, Secret: secret}, nil)
 	forwarder.enqueue(sdkapp.HermesRobotEvent{Type: "wirepod.face_recognized", ESN: "ESN-A", FaceID: 42, Name: "Ash", ObservedAt: 1})
 	select {
 	case ok := <-received:

@@ -41,15 +41,23 @@ var hermesControl = struct {
 }{}
 
 const (
-	hermesObserveTimeout = 5 * time.Second
-	hermesSpeechTimeout  = 20 * time.Second
-	hermesMotionTimeout  = 8 * time.Second
-	hermesUndockTimeout  = 30 * time.Second
-	hermesScanTimeout    = 30 * time.Second
-	maxHermesWheelMMPS   = 200
-	maxHermesMotionMS    = 2000
-	maxHermesJointRadPS  = 2
+	hermesObserveTimeout  = 5 * time.Second
+	hermesSnapshotTimeout = 10 * time.Second
+	hermesSpeechTimeout   = 20 * time.Second
+	hermesMotionTimeout   = 8 * time.Second
+	hermesUndockTimeout   = 30 * time.Second
+	hermesScanTimeout     = 30 * time.Second
+	maxHermesWheelMMPS    = 200
+	maxHermesMotionMS     = 2000
+	maxHermesJointRadPS   = 2
 )
+
+// HermesSnapshot is a fresh camera image captured solely for the owning Hermes
+// profile. It is intentionally an in-memory value: the bridge streams it with
+// no-store semantics and WirePod never writes a face image to disk.
+type HermesSnapshot struct {
+	JPEG []byte
+}
 
 // HermesObserve returns a bounded live observation from the robot assigned to
 // one Hermes profile. It intentionally returns enrolled faces (a roster), not
@@ -84,6 +92,43 @@ func HermesObserve(serial string) (HermesObservation, error) {
 		IsOnChargerPlatform: battery.GetIsOnChargerPlatform(),
 		Faces:               faceJSON,
 	}, nil
+}
+
+// HermesCaptureSnapshot captures one fresh JPEG from the native camera feed
+// without moving or speaking through the robot. It shares the control mutex
+// with behaviour calls because the Vector SDK permits only one active client
+// operation at a time.
+func HermesCaptureSnapshot(serial string) (HermesSnapshot, error) {
+	hermesControl.Lock()
+	defer hermesControl.Unlock()
+
+	robot, _, err := getRobot(serial)
+	if err != nil {
+		return HermesSnapshot{}, err
+	}
+	ctx, cancel := context.WithTimeout(robot.Ctx, hermesSnapshotTimeout)
+	defer cancel()
+	if _, err := robot.Vector.Conn.EnableImageStreaming(ctx, &vectorpb.EnableImageStreamingRequest{Enable: true}); err != nil {
+		return HermesSnapshot{}, err
+	}
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cleanupCancel()
+		_, _ = robot.Vector.Conn.EnableImageStreaming(cleanupCtx, &vectorpb.EnableImageStreamingRequest{Enable: false})
+	}()
+	stream, err := robot.Vector.Conn.CameraFeed(ctx, &vectorpb.CameraFeedRequest{})
+	if err != nil {
+		return HermesSnapshot{}, err
+	}
+	response, err := stream.Recv()
+	if err != nil {
+		return HermesSnapshot{}, err
+	}
+	image := response.GetData()
+	if len(image) < 4 || len(image) > 8*1024*1024 || image[0] != 0xff || image[1] != 0xd8 || image[2] != 0xff {
+		return HermesSnapshot{}, fmt.Errorf("Vector returned an invalid camera image")
+	}
+	return HermesSnapshot{JPEG: append([]byte(nil), image...)}, nil
 }
 
 // HermesControl performs one bounded robot action. Drive, head, and lift

@@ -13,7 +13,8 @@ import (
 
 // HermesRobotEvent contains only the compact, useful part of a robot event.
 // In particular, face landmark geometry and camera frames stay on the Pi and
-// are never forwarded to an agent webhook.
+// are never forwarded to an agent webhook; the profile-scoped snapshot tool
+// obtains a fresh frame only when the receiving Hermes route needs one.
 type HermesRobotEvent struct {
 	SchemaVersion int                        `json:"schema_version,omitempty"`
 	Type          string                     `json:"event_type"`
@@ -25,6 +26,9 @@ type HermesRobotEvent struct {
 	OldFaceID     int32                      `json:"old_face_id,omitempty"`
 	NewFaceID     int32                      `json:"new_face_id,omitempty"`
 	Reason        string                     `json:"reason,omitempty"`
+	SnapshotID    string                     `json:"snapshot_id,omitempty"`
+	CapturedAt    int64                      `json:"captured_at_unix_ms,omitempty"`
+	SnapshotUntil int64                      `json:"snapshot_expires_at_unix_ms,omitempty"`
 	ExpiresAt     int64                      `json:"expires_at_unix_ms,omitempty"`
 	Observation   *HermesAutonomyObservation `json:"observation,omitempty"`
 	ObservedAt    int64                      `json:"observed_at_unix_ms"`
@@ -47,7 +51,8 @@ var hermesEventStreams = struct {
 	sync.Mutex
 	streams map[string]hermesEventStream
 	last    map[string]time.Time
-}{streams: make(map[string]hermesEventStream), last: make(map[string]time.Time)}
+	edge    map[string]bool
+}{streams: make(map[string]hermesEventStream), last: make(map[string]time.Time), edge: make(map[string]bool)}
 
 // StartHermesEvents consumes the Vector event stream once per robot and hands
 // safe face-related events to sink. It never blocks the SDK receive loop on a
@@ -74,6 +79,7 @@ func runHermesEvents(ctx context.Context, cancel context.CancelFunc, serial stri
 	defer func() {
 		hermesEventStreams.Lock()
 		delete(hermesEventStreams.streams, serial)
+		delete(hermesEventStreams.edge, serial)
 		hermesEventStreams.Unlock()
 	}()
 	backoff := time.Second
@@ -114,7 +120,7 @@ func receiveHermesEvents(ctx context.Context, serial string, sink func(HermesRob
 	}()
 	stream, err := robot.Vector.Conn.EventStream(streamCtx, &vectorpb.EventRequest{
 		ListType: &vectorpb.EventRequest_WhiteList{WhiteList: &vectorpb.FilterList{List: []string{
-			"robot_observed_face", "robot_changed_observed_face_id",
+			"robot_observed_face", "robot_changed_observed_face_id", "robot_state",
 		}}},
 		ConnectionId: "wirepod-hermes",
 	})
@@ -126,6 +132,12 @@ func receiveHermesEvents(ctx context.Context, serial string, sink func(HermesRob
 		if err != nil {
 			return err
 		}
+		if event, isState := hermesEdgeEventFromResponse(serial, response); isState {
+			if event.Type != "" {
+				sink(event)
+			}
+			continue
+		}
 		event := hermesEventFromResponse(serial, response)
 		if event.Type == "" || !shouldForwardHermesEvent(event) {
 			continue
@@ -133,6 +145,25 @@ func receiveHermesEvents(ctx context.Context, serial string, sink func(HermesRob
 		sink(event)
 	}
 	return streamCtx.Err()
+}
+
+// hermesEdgeEventFromResponse turns a sustained cliff sensor assertion into a
+// single rising-edge event. The state packet stream can be very frequent, and
+// taking a camera image for every sample would create an unsafe model storm.
+func hermesEdgeEventFromResponse(serial string, response *vectorpb.EventResponse) (HermesRobotEvent, bool) {
+	state := response.GetEvent().GetRobotState()
+	if state == nil {
+		return HermesRobotEvent{}, false
+	}
+	detected := state.GetStatus()&uint32(vectorpb.RobotStatus_ROBOT_STATUS_CLIFF_DETECTED) != 0
+	hermesEventStreams.Lock()
+	previous := hermesEventStreams.edge[serial]
+	hermesEventStreams.edge[serial] = detected
+	hermesEventStreams.Unlock()
+	if !detected || previous {
+		return HermesRobotEvent{}, true
+	}
+	return HermesRobotEvent{Type: "wirepod.edge_detected", ESN: serial, Reason: "cliff_sensor", ObservedAt: time.Now().UnixMilli()}, true
 }
 
 func hermesEventsActive(serial string) bool {

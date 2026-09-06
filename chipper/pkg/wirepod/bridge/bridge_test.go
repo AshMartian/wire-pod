@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -139,5 +140,46 @@ func TestBridgeCommandIsScopedAndPassesOnlyDecodedAction(t *testing.T) {
 	mux.ServeHTTP(w, request)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("cross-scope command accepted: %d", w.Code)
+	}
+}
+
+func TestBridgeSnapshotIsScopedAndNeverSerializedAsJSON(t *testing.T) {
+	mux := http.NewServeMux()
+	called := false
+	image := []byte{0xff, 0xd8, 0xff, 0xe0, 0x01, 0x02, 0xff, 0xd9}
+	server := &Server{credentials: []credential{{esn: "ESN-A", token: []byte(tokenA)}}, snapshot: func() ([]robot, error) {
+		return []robot{{ESN: "ESN-A", Activated: true}, {ESN: "ESN-B", Activated: true}}, nil
+	}, capture: func(esn string) (sdkapp.HermesSnapshot, error) {
+		called = esn == "ESN-A"
+		return sdkapp.HermesSnapshot{JPEG: image}, nil
+	}, snapshots: newCameraSnapshotVault()}
+	server.Register(mux)
+	request := httptest.NewRequest(http.MethodPost, "/bridge/v1/robots/ESN-A/camera/snapshots", nil)
+	request.Header.Set("Authorization", "Bearer "+tokenA)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, request)
+	if w.Code != http.StatusCreated || !called || w.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("unexpected snapshot creation response: %d %q", w.Code, w.Body.String())
+	}
+	var reference cameraSnapshotReference
+	if err := json.Unmarshal(w.Body.Bytes(), &reference); err != nil || reference.ID == "" {
+		t.Fatalf("invalid snapshot reference: %v %q", err, w.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "/bridge/v1/robots/ESN-A/camera/snapshots/"+reference.ID, nil)
+	request.Header.Set("Authorization", "Bearer "+tokenA)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, request)
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "image/jpeg" || !bytes.Equal(w.Body.Bytes(), image) {
+		t.Fatalf("unexpected snapshot image response: %d %q", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "data:") || strings.Contains(w.Body.String(), "base64") {
+		t.Fatalf("snapshot response was encoded into a text payload: %q", w.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "/bridge/v1/robots/ESN-B/camera/snapshots/"+reference.ID, nil)
+	request.Header.Set("Authorization", "Bearer "+tokenA)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, request)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("cross-scope snapshot accepted: %d", w.Code)
 	}
 }

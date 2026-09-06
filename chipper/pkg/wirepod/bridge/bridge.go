@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/kercre123/wire-pod/chipper/pkg/vars"
@@ -23,6 +24,8 @@ type Server struct {
 	credentials []credential
 	control     func(string, sdkapp.HermesCommand) (sdkapp.HermesCommandResult, error)
 	observe     func(string) (sdkapp.HermesObservation, error)
+	capture     func(string) (sdkapp.HermesSnapshot, error)
+	snapshots   *cameraSnapshotVault
 }
 
 type credential struct {
@@ -48,7 +51,7 @@ func RegisterFromEnv(mux *http.ServeMux, sourceSHA string) bool {
 	if err != nil {
 		return false
 	}
-	server := &Server{credentials: credentials, sourceSHA: sourceSHA, snapshot: robotsFromDisk}
+	server := &Server{credentials: credentials, sourceSHA: sourceSHA, snapshot: robotsFromDisk, snapshots: newCameraSnapshotVault()}
 	server.Register(mux)
 	server.startEventForwarding()
 	return true
@@ -110,15 +113,15 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 func bridgeRobotPath(path string) (string, string, bool) {
 	parts := strings.Split(strings.TrimPrefix(path, "robots/"), "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", false
 	}
-	return parts[0], parts[1], true
+	return parts[0], strings.Join(parts[1:], "/"), true
 }
 
 func (s *Server) handleRobotResource(w http.ResponseWriter, r *http.Request, esn, resource string) {
-	switch resource {
-	case "status":
+	switch {
+	case resource == "status":
 		if !allowMethod(w, r, http.MethodGet) {
 			return
 		}
@@ -136,7 +139,7 @@ func (s *Server) handleRobotResource(w http.ResponseWriter, r *http.Request, esn
 			SourceSHA string `json:"source_sha"`
 			Robot     robot  `json:"robot"`
 		}{s.sourceSHA, entry})
-	case "observation":
+	case resource == "observation":
 		if !allowMethod(w, r, http.MethodGet) {
 			return
 		}
@@ -149,7 +152,35 @@ func (s *Server) handleRobotResource(w http.ResponseWriter, r *http.Request, esn
 			SourceSHA   string                   `json:"source_sha"`
 			Observation sdkapp.HermesObservation `json:"observation"`
 		}{s.sourceSHA, observation})
-	case "commands":
+	case resource == "camera/snapshots":
+		if !allowMethod(w, r, http.MethodPost) {
+			return
+		}
+		reference, ok := s.captureAndStore(esn)
+		if !ok {
+			http.Error(w, "robot camera is temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, reference)
+	case strings.HasPrefix(resource, "camera/snapshots/"):
+		if !allowMethod(w, r, http.MethodGet) {
+			return
+		}
+		id := strings.TrimPrefix(resource, "camera/snapshots/")
+		if strings.Contains(id, "/") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		image, ok := s.cameraVault().get(esn, id)
+		if !ok {
+			http.Error(w, "camera snapshot not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Header().Set("Content-Length", strconv.Itoa(len(image)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(image)
+	case resource == "commands":
 		if !allowMethod(w, r, http.MethodPost) {
 			return
 		}
@@ -218,6 +249,13 @@ func (s *Server) observation(esn string) (sdkapp.HermesObservation, error) {
 		return s.observe(esn)
 	}
 	return sdkapp.HermesObserve(esn)
+}
+
+func (s *Server) captureSnapshot(esn string) (sdkapp.HermesSnapshot, error) {
+	if s.capture != nil {
+		return s.capture(esn)
+	}
+	return sdkapp.HermesCaptureSnapshot(esn)
 }
 
 func (s *Server) authorized(r *http.Request) (string, bool) {

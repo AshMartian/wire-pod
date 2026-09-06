@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 from wirepod import register  # noqa: E402
-from wirepod.tools import BridgeConfig, vector_command, vector_status  # noqa: E402
+from wirepod.tools import BridgeConfig, vector_capture_image, vector_command, vector_status  # noqa: E402
 
 
 class BridgeHandler(BaseHTTPRequestHandler):
@@ -20,16 +20,26 @@ class BridgeHandler(BaseHTTPRequestHandler):
     esn = "ESN-A"
     mode = "normal"
     last_command = None
+    snapshot_id = "0123456789abcdef0123456789abcdef"
+    image = b"\xff\xd8\xff\xe0camera-test\xff\xd9"
 
     def do_GET(self):  # noqa: N802
         if self.headers.get("Authorization") != f"Bearer {self.token}":
             self.send_error(401)
+            return
+        if self.path == f"/bridge/v1/robots/ESN-A/camera/snapshots/{self.snapshot_id}":
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(self.image)))
+            self.end_headers()
+            self.wfile.write(self.image)
             return
         if self.path != "/bridge/v1/robots/ESN-A/status":
             self.send_error(404)
             return
         body = json.dumps({"source_sha": "test-sha", "robot": {"esn": self.esn, "activated": True}}).encode()
         if self.mode == "trickle":
+            body = b'{"robot":'
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -55,6 +65,14 @@ class BridgeHandler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         if self.headers.get("Authorization") != f"Bearer {self.token}":
             self.send_error(401)
+            return
+        if self.path == "/bridge/v1/robots/ESN-A/camera/snapshots":
+            body = json.dumps({"snapshot_id": self.snapshot_id, "captured_at_unix_ms": 1, "expires_at_unix_ms": 2}).encode()
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if self.path != "/bridge/v1/robots/ESN-A/commands":
             self.send_error(404)
@@ -128,6 +146,19 @@ class ToolsTest(unittest.TestCase):
         self.assertFalse(rejected["ok"])
         self.assertEqual(rejected["error"], "invalid bounded Vector command")
 
+    def test_capture_attaches_only_a_profile_scoped_multimodal_image(self):
+        result = vector_capture_image({}, self.config())
+        self.assertIsInstance(result, dict)
+        self.assertTrue(result["_multimodal"])
+        self.assertEqual(result["content"][0]["type"], "text")
+        url = result["content"][1]["image_url"]["url"]
+        self.assertTrue(url.startswith("data:image/jpeg;base64,"))
+        self.assertNotIn(self.config().token, url)
+        event_frame = vector_capture_image({"snapshot_id": BridgeHandler.snapshot_id}, self.config())
+        self.assertIsInstance(event_frame, dict)
+        rejected = json.loads(vector_capture_image({"snapshot_id": "other"}, self.config()))
+        self.assertFalse(rejected["ok"])
+
     def test_post_header_deadline_rejects_trickled_response(self):
         BridgeHandler.mode = "trickle"
         started = time.monotonic()
@@ -159,6 +190,7 @@ class ToolsTest(unittest.TestCase):
         context = Context()
         register(context)
         self.assertEqual(context.schemas["vector_status"]["name"], "vector_status")
+        self.assertEqual(context.schemas["vector_capture_image"]["name"], "vector_capture_image")
         self.assertIn("vector_stop", context.handlers)
         self.assertEqual(context.schemas["vector_undock"]["parameters"]["properties"], {})
         self.assertEqual(context.schemas["vector_scan"]["parameters"]["properties"], {})

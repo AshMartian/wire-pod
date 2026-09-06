@@ -27,9 +27,10 @@ type webhookTarget struct {
 }
 
 type webhookForwarder struct {
-	target webhookTarget
-	queue  chan sdkapp.HermesRobotEvent
-	client *http.Client
+	target  webhookTarget
+	queue   chan sdkapp.HermesRobotEvent
+	client  *http.Client
+	prepare func(sdkapp.HermesRobotEvent) sdkapp.HermesRobotEvent
 }
 
 func webhookTargetsFromEnv(value string) (map[string]webhookTarget, error) {
@@ -57,11 +58,12 @@ func webhookTargetsFromEnv(value string) (map[string]webhookTarget, error) {
 	return targets, nil
 }
 
-func newWebhookForwarder(target webhookTarget) *webhookForwarder {
+func newWebhookForwarder(target webhookTarget, prepare func(sdkapp.HermesRobotEvent) sdkapp.HermesRobotEvent) *webhookForwarder {
 	forwarder := &webhookForwarder{
-		target: target,
-		queue:  make(chan sdkapp.HermesRobotEvent, 32),
-		client: &http.Client{Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		target:  target,
+		queue:   make(chan sdkapp.HermesRobotEvent, 32),
+		client:  &http.Client{Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		prepare: prepare,
 	}
 	go forwarder.run()
 	return forwarder
@@ -82,6 +84,9 @@ func (f *webhookForwarder) run() {
 }
 
 func (f *webhookForwarder) deliver(event sdkapp.HermesRobotEvent) {
+	if f.prepare != nil {
+		event = f.prepare(event)
+	}
 	body, err := json.Marshal(event)
 	if err != nil {
 		return
@@ -130,7 +135,7 @@ func (s *Server) startEventForwarding() {
 		if !ok {
 			continue
 		}
-		forwarder := newWebhookForwarder(target)
+		forwarder := newWebhookForwarder(target, s.attachEventSnapshot)
 		sdkapp.StartHermesEvents(credential.esn, forwarder.enqueue)
 		if config, ok := autonomy[strings.ToLower(credential.esn)]; ok {
 			sdkapp.StartHermesAutonomy(credential.esn, config, forwarder.enqueue)

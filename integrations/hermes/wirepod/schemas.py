@@ -19,6 +19,20 @@ VECTOR_OBSERVE = {
     "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
 }
 
+VECTOR_CAPTURE_IMAGE = {
+    "name": "vector_capture_image",
+    "description": (
+        "Capture a fresh camera image from this profile's Vector and attach it to the current agent context. "
+        "When a face or cliff event contains snapshot_id, pass it to retrieve that event-associated frame before it expires. "
+        "Do not use an image to infer a person's identity."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {"snapshot_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"}},
+        "additionalProperties": False,
+    },
+}
+
 VECTOR_SAY = {
     "name": "vector_say",
     "description": "Have this profile's Vector speak a short, user-safe sentence through its Vector voice.",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from http.client import HTTPException
 import time
@@ -76,6 +77,32 @@ def vector_observe(args: dict[str, Any], config: BridgeConfig) -> str:
     return json.dumps({"ok": True, "source_sha": payload.get("source_sha"), "observation": observation})
 
 
+def vector_capture_image(args: dict[str, Any], config: BridgeConfig) -> dict[str, Any] | str:
+    """Capture one fresh profile-scoped Vector image for the current context."""
+    base_url = f"{config.url}/bridge/v1/robots/{quote(config.esn, safe='')}/camera/snapshots"
+    snapshot_id = args.get("snapshot_id") if set(args) == {"snapshot_id"} else None
+    if args and (not isinstance(snapshot_id, str) or len(snapshot_id) != 32 or any(character not in "0123456789abcdef" for character in snapshot_id)):
+        return json.dumps({"ok": False, "error": "invalid camera snapshot reference"})
+    if snapshot_id is None:
+        reference = _request_json("POST", base_url, config)
+        if reference is None or not isinstance(reference.get("snapshot_id"), str):
+            return json.dumps({"ok": False, "error": "Vector camera is unavailable"})
+        snapshot_id = reference["snapshot_id"]
+    url = f"{base_url}/{snapshot_id}"
+    image = _request_image(url, config)
+    if image is None:
+        return json.dumps({"ok": False, "error": "Vector camera is unavailable"})
+    encoded = base64.b64encode(image).decode("ascii")
+    return {
+        "_multimodal": True,
+        "content": [
+            {"type": "text", "text": "Fresh camera frame captured from this profile's Vector."},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}},
+        ],
+        "text_summary": "A fresh camera frame from this Vector was attached to the current context.",
+    }
+
+
 def vector_command(args: dict[str, Any], config: BridgeConfig, action: str) -> str:
     """Send only a whitelisted, schema-validated command to the profile's Vector."""
     command = dict(args)
@@ -112,7 +139,7 @@ def _request_json(method: str, url: str, config: BridgeConfig, body: dict[str, A
     deadline = time.monotonic() + config.timeout_seconds
     try:
         with build_opener(NoRedirect()).open(request, timeout=_remaining_timeout(deadline)) as response:
-            if response.status not in {200, 202}:
+            if response.status not in {200, 201, 202}:
                 raise ValueError("bridge returned an unexpected status")
             payload = json.loads(_read_bounded(response, deadline))
     except HTTPError as error:
@@ -125,6 +152,29 @@ def _request_json(method: str, url: str, config: BridgeConfig, body: dict[str, A
     return payload if isinstance(payload, dict) else None
 
 
+def _request_image(url: str, config: BridgeConfig) -> bytes | None:
+    request = Request(url, method="GET", headers={"Accept": "image/jpeg", "Authorization": f"Bearer {config.token}"})
+    deadline = time.monotonic() + config.timeout_seconds
+    try:
+        with build_opener(NoRedirect()).open(request, timeout=_remaining_timeout(deadline)) as response:
+            if response.status != 200 or response.headers.get_content_type() != "image/jpeg":
+                raise ValueError("bridge returned an unexpected image response")
+            length = response.headers.get("Content-Length")
+            if length is not None and (not length.isdecimal() or int(length) > 8 * 1024 * 1024):
+                raise ValueError("bridge image exceeds 8 MiB")
+            image = _read_bounded(response, deadline, 8 * 1024 * 1024)
+    except HTTPError as error:
+        try:
+            return None
+        finally:
+            error.close()
+    except (HTTPException, URLError, TimeoutError, ValueError, OSError):
+        return None
+    if len(image) < 4 or not image.startswith(b"\xff\xd8\xff") or not image.endswith(b"\xff\xd9"):
+        return None
+    return image
+
+
 def _remaining_timeout(deadline: float) -> float:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -132,21 +182,21 @@ def _remaining_timeout(deadline: float) -> float:
     return remaining
 
 
-def _read_bounded(response: Any, deadline: float) -> bytes:
-    """Read at most 64 KiB before the post-header elapsed deadline.
+def _read_bounded(response: Any, deadline: float, maximum: int = 65536) -> bytes:
+    """Read a bounded response before the post-header elapsed deadline.
 
     urllib's header parsing timeout is an inactivity timeout. Once headers
     arrive, setting the underlying socket deadline before every byte prevents a
     peer from extending a response by slowly trickling otherwise-valid JSON.
     """
     chunks = bytearray()
-    while len(chunks) <= 65536:
+    while len(chunks) <= maximum:
         _set_response_timeout(response, _remaining_timeout(deadline))
         chunk = response.read(1)
         if not chunk:
             return bytes(chunks)
         chunks.extend(chunk)
-    raise ValueError("wire-pod bridge response exceeds 64 KiB")
+    raise ValueError("wire-pod bridge response exceeds the allowed size")
 
 
 def _set_response_timeout(response: Any, timeout: float) -> None:
