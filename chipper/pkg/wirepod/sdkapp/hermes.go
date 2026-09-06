@@ -107,11 +107,14 @@ func HermesCaptureSnapshot(serial string) (HermesSnapshot, error) {
 		return HermesSnapshot{}, err
 	}
 	ctx, cancel := context.WithTimeout(robot.Ctx, hermesSnapshotTimeout)
-	defer cancel()
 	if _, err := robot.Vector.Conn.EnableImageStreaming(ctx, &vectorpb.EnableImageStreamingRequest{Enable: true}); err != nil {
+		cancel()
 		return HermesSnapshot{}, err
 	}
 	defer func() {
+		// End the CameraFeed RPC before disabling the producer. Reversing this
+		// order leaves some Vector firmware revisions with a stuck feed client.
+		cancel()
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cleanupCancel()
 		_, _ = robot.Vector.Conn.EnableImageStreaming(cleanupCtx, &vectorpb.EnableImageStreamingRequest{Enable: false})
