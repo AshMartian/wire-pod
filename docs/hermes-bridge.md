@@ -65,6 +65,14 @@ Wheel speeds are limited to ±200 mm/s; head/lift speeds to ±2 rad/s; moving co
 
 An agent starts with a separate Hermes home, database, plugin credential and SOUL prompt. Do not clone one Vector's memory into another. Let a profile choose a name and develop a character over genuine interaction; treat face labels and personal memories as consent-sensitive, editable records. Webhook prompts should ask the agent to observe first and only make a small embodied acknowledgement when context makes it appropriate.
 
+## Full-charge autonomy and nighttime reflection
+
+Optional full-charge autonomy is a Pi-owned safety monitor, not an LLM polling loop. `WIREPOD_HERMES_AUTONOMY` is a per-ESN JSON map; every enabled robot has a poll interval of at least 60 seconds, a stable period of at least five minutes, and a daytime window. Production uses 08:00–21:59 local time. During the 22:00–07:59 night window the monitor neither emits readiness events nor initiates movement.
+
+When a Vector has reported `BATTERY_LEVEL_FULL`, charging, and on its charger continuously for the stable period, WirePod emits one signed `wirepod.autonomy_ready` event. The event expires after one minute and contains only compact battery/charger state. Hermes must independently re-read `vector_observe` before using `vector_undock`; the bridge repeats the exact-full, charging, and on-charger check immediately before the native SDK operation. `vector_scan` is stationary `LookAroundInPlace` plus face search. Neither tool provides free-roam, map navigation, or a return-to-charger guarantee.
+
+Nighttime is reserved for the profiles' existing daily reflection jobs. Those jobs use low reasoning, preserve only consented durable memory, and must not move or speak through a robot. Keep the Hermes cron toolset limited to `wirepod` and `no_mcp` rather than inheriting broad host capabilities. Camera frames remain local until a separate authenticated snapshot/vision contract is enabled; raw images and base64 data never go into autonomy webhooks.
+
 ## Validation
 
 ```bash

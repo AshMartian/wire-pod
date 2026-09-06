@@ -103,7 +103,7 @@ def _valid_command(command: dict[str, Any]) -> bool:
     if action in {"head", "lift"}:
         keys = {"action", "speed_rad_per_sec", "duration_ms"}
         return set(command) == keys and all(isinstance(command[key], int) and not isinstance(command[key], bool) for key in keys - {"action"}) and -2 <= command["speed_rad_per_sec"] <= 2 and 50 <= command["duration_ms"] <= 2000
-    return action == "stop" and set(command) == {"action"}
+    return action in {"stop", "undock", "scan"} and set(command) == {"action"}
 
 
 def _request_json(method: str, url: str, config: BridgeConfig, body: dict[str, Any] | None = None) -> dict[str, Any] | None:

@@ -121,6 +121,10 @@ func (s *Server) startEventForwarding() {
 	if err != nil || len(targets) == 0 {
 		return
 	}
+	autonomy, err := autonomyTargetsFromEnv(os.Getenv(hermesAutonomyEnv))
+	if err != nil {
+		autonomy = map[string]sdkapp.HermesAutonomyConfig{}
+	}
 	for _, credential := range s.credentials {
 		target, ok := targets[strings.ToLower(credential.esn)]
 		if !ok {
@@ -128,5 +132,8 @@ func (s *Server) startEventForwarding() {
 		}
 		forwarder := newWebhookForwarder(target)
 		sdkapp.StartHermesEvents(credential.esn, forwarder.enqueue)
+		if config, ok := autonomy[strings.ToLower(credential.esn)]; ok {
+			sdkapp.StartHermesAutonomy(credential.esn, config, forwarder.enqueue)
+		}
 	}
 }

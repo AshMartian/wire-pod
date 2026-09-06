@@ -2,7 +2,17 @@
 
 import json
 
-from .schemas import VECTOR_DRIVE, VECTOR_MOVE_HEAD, VECTOR_MOVE_LIFT, VECTOR_OBSERVE, VECTOR_SAY, VECTOR_STATUS, VECTOR_STOP
+from .schemas import (
+    VECTOR_DRIVE,
+    VECTOR_MOVE_HEAD,
+    VECTOR_MOVE_LIFT,
+    VECTOR_OBSERVE,
+    VECTOR_SAY,
+    VECTOR_SCAN,
+    VECTOR_STATUS,
+    VECTOR_STOP,
+    VECTOR_UNDOCK,
+)
 from .tools import BridgeConfig, vector_command, vector_observe, vector_status
 
 
@@ -44,3 +54,5 @@ def register(ctx) -> None:
     ctx.register_tool(name="vector_move_head", toolset="wirepod", schema=VECTOR_MOVE_HEAD, handler=command_handler("head"))
     ctx.register_tool(name="vector_move_lift", toolset="wirepod", schema=VECTOR_MOVE_LIFT, handler=command_handler("lift"))
     ctx.register_tool(name="vector_stop", toolset="wirepod", schema=VECTOR_STOP, handler=command_handler("stop"))
+    ctx.register_tool(name="vector_undock", toolset="wirepod", schema=VECTOR_UNDOCK, handler=command_handler("undock"))
+    ctx.register_tool(name="vector_scan", toolset="wirepod", schema=VECTOR_SCAN, handler=command_handler("scan"))

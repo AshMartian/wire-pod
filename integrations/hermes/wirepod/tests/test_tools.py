@@ -117,6 +117,17 @@ class ToolsTest(unittest.TestCase):
         self.assertFalse(rejected["ok"])
         self.assertEqual(rejected["error"], "invalid bounded Vector command")
 
+    def test_undock_and_scan_are_explicit_no_argument_commands(self):
+        undock = json.loads(vector_command({}, self.config(), "undock"))
+        self.assertTrue(undock["ok"])
+        self.assertEqual(BridgeHandler.last_command, {"action": "undock"})
+        scan = json.loads(vector_command({}, self.config(), "scan"))
+        self.assertTrue(scan["ok"])
+        self.assertEqual(BridgeHandler.last_command, {"action": "scan"})
+        rejected = json.loads(vector_command({"duration_ms": 50}, self.config(), "scan"))
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(rejected["error"], "invalid bounded Vector command")
+
     def test_post_header_deadline_rejects_trickled_response(self):
         BridgeHandler.mode = "trickle"
         started = time.monotonic()
@@ -149,6 +160,8 @@ class ToolsTest(unittest.TestCase):
         register(context)
         self.assertEqual(context.schemas["vector_status"]["name"], "vector_status")
         self.assertIn("vector_stop", context.handlers)
+        self.assertEqual(context.schemas["vector_undock"]["parameters"]["properties"], {})
+        self.assertEqual(context.schemas["vector_scan"]["parameters"]["properties"], {})
         result = json.loads(context.handlers["vector_status"]({"vector_esn": "model-supplied-value"}))
         self.assertTrue(result["ok"])
         self.assertEqual(result["robot"]["esn"], "ESN-A")

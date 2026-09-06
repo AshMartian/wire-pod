@@ -72,3 +72,21 @@ VECTOR_STOP = {
     "description": "Immediately stop this Vector's wheels, head, and lift.",
     "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
 }
+
+VECTOR_UNDOCK = {
+    "name": "vector_undock",
+    "description": (
+        "Ask this profile's Vector to leave its charger once. Use only in its approved enclosed play area; "
+        "this is not permission for autonomous free-roam or navigation."
+    ),
+    "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+}
+
+VECTOR_SCAN = {
+    "name": "vector_scan",
+    "description": (
+        "Perform one stationary environmental scan with this profile's Vector. This does not drive, explore, "
+        "or navigate the robot."
+    ),
+    "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+}

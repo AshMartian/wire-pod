@@ -1,10 +1,10 @@
 name: wirepod
-version: "0.2.0"
+version: "0.3.0"
 description: Profile-bound Vector observation and bounded motion/expression controls.
 manifest_version: 2
 api_version: 1
 tags: [wirepod, vector, robot]
-provides_tools: [vector_status, vector_observe, vector_say, vector_drive, vector_move_head, vector_move_lift, vector_stop]
+provides_tools: [vector_status, vector_observe, vector_say, vector_drive, vector_move_head, vector_move_lift, vector_stop, vector_undock, vector_scan]
 config_schema:
   bridge_url:
     type: str

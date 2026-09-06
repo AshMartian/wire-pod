@@ -44,6 +44,8 @@ const (
 	hermesObserveTimeout = 5 * time.Second
 	hermesSpeechTimeout  = 20 * time.Second
 	hermesMotionTimeout  = 8 * time.Second
+	hermesUndockTimeout  = 30 * time.Second
+	hermesScanTimeout    = 30 * time.Second
 	maxHermesWheelMMPS   = 200
 	maxHermesMotionMS    = 2000
 	maxHermesJointRadPS  = 2
@@ -85,9 +87,9 @@ func HermesObserve(serial string) (HermesObservation, error) {
 }
 
 // HermesControl performs one bounded robot action. Drive, head, and lift
-// commands always receive a matching stop after at most two seconds. A newer
-// movement invalidates older scheduled stops so an old timer cannot cancel a
-// subsequent motion command.
+// commands always receive a matching stop after at most two seconds. Undock is
+// deliberately available only to a full Vector that is actively charging on
+// its charger. Scan runs only native, in-place behaviours; it never drives.
 func HermesControl(serial string, command HermesCommand) (HermesCommandResult, error) {
 	hermesControl.Lock()
 	defer hermesControl.Unlock()
@@ -101,8 +103,13 @@ func HermesControl(serial string, command HermesCommand) (HermesCommandResult, e
 		return HermesCommandResult{}, err
 	}
 	timeout := hermesMotionTimeout
-	if action == "say" {
+	switch action {
+	case "say":
 		timeout = hermesSpeechTimeout
+	case "undock":
+		timeout = hermesUndockTimeout
+	case "scan":
+		timeout = hermesScanTimeout
 	}
 	ctx, cancel := context.WithTimeout(robot.Ctx, timeout)
 	defer cancel()
@@ -168,6 +175,28 @@ func HermesControl(serial string, command HermesCommand) (HermesCommandResult, e
 			return actionErr
 		})
 		return HermesCommandResult{Action: action}, err
+	case "undock":
+		err = withHermesBehaviorControl(ctx, robot, func(actionCtx context.Context) error {
+			battery, batteryErr := robot.Vector.Conn.BatteryState(actionCtx, &vectorpb.BatteryStateRequest{})
+			if batteryErr != nil {
+				return batteryErr
+			}
+			if !eligibleForHermesUndock(battery) {
+				return fmt.Errorf("undock requires a full Vector that is charging on its charger")
+			}
+			_, actionErr := robot.Vector.Conn.DriveOffCharger(actionCtx, &vectorpb.DriveOffChargerRequest{})
+			return actionErr
+		})
+		return HermesCommandResult{Action: action}, err
+	case "scan":
+		err = withHermesBehaviorControl(ctx, robot, func(actionCtx context.Context) error {
+			if _, actionErr := robot.Vector.Conn.LookAroundInPlace(actionCtx, &vectorpb.LookAroundInPlaceRequest{}); actionErr != nil {
+				return actionErr
+			}
+			_, actionErr := robot.Vector.Conn.FindFaces(actionCtx, &vectorpb.FindFacesRequest{})
+			return actionErr
+		})
+		return HermesCommandResult{Action: action}, err
 	default:
 		return HermesCommandResult{}, fmt.Errorf("unsupported Hermes action")
 	}
@@ -191,11 +220,21 @@ func ValidateHermesCommand(command HermesCommand) error {
 		if !validJointMotion(command.SpeedRadPerSec, command.DurationMS) {
 			return fmt.Errorf("joint values exceed the bounded control range")
 		}
-	case "stop":
+	case "stop", "undock", "scan":
 	default:
 		return fmt.Errorf("unsupported Hermes action")
 	}
 	return nil
+}
+
+// eligibleForHermesUndock intentionally has no voltage threshold or partial
+// charge exception. Autonomous charger departure is safe to attempt only when
+// the SDK reports all three explicit states at the instant before the action.
+func eligibleForHermesUndock(battery *vectorpb.BatteryStateResponse) bool {
+	return battery != nil &&
+		battery.GetBatteryLevel() == vectorpb.BatteryLevel_BATTERY_LEVEL_FULL &&
+		battery.GetIsCharging() &&
+		battery.GetIsOnChargerPlatform()
 }
 
 func validMotion(first, second, durationMS int) bool {

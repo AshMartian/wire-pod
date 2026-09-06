@@ -15,14 +15,28 @@ import (
 // In particular, face landmark geometry and camera frames stay on the Pi and
 // are never forwarded to an agent webhook.
 type HermesRobotEvent struct {
-	Type       string `json:"event_type"`
-	ESN        string `json:"esn"`
-	FaceID     int32  `json:"face_id,omitempty"`
-	Name       string `json:"name,omitempty"`
-	Expression string `json:"expression,omitempty"`
-	OldFaceID  int32  `json:"old_face_id,omitempty"`
-	NewFaceID  int32  `json:"new_face_id,omitempty"`
-	ObservedAt int64  `json:"observed_at_unix_ms"`
+	SchemaVersion int                        `json:"schema_version,omitempty"`
+	Type          string                     `json:"event_type"`
+	EventID       string                     `json:"event_id,omitempty"`
+	ESN           string                     `json:"esn"`
+	FaceID        int32                      `json:"face_id,omitempty"`
+	Name          string                     `json:"name,omitempty"`
+	Expression    string                     `json:"expression,omitempty"`
+	OldFaceID     int32                      `json:"old_face_id,omitempty"`
+	NewFaceID     int32                      `json:"new_face_id,omitempty"`
+	Reason        string                     `json:"reason,omitempty"`
+	ExpiresAt     int64                      `json:"expires_at_unix_ms,omitempty"`
+	Observation   *HermesAutonomyObservation `json:"observation,omitempty"`
+	ObservedAt    int64                      `json:"observed_at_unix_ms"`
+}
+
+// HermesAutonomyObservation is deliberately compact enough for a signed
+// webhook. Camera frames and raw proximity data remain on the Pi.
+type HermesAutonomyObservation struct {
+	BatteryLevel        string  `json:"battery_level"`
+	BatteryVolts        float32 `json:"battery_volts"`
+	IsCharging          bool    `json:"is_charging"`
+	IsOnChargerPlatform bool    `json:"is_on_charger_platform"`
 }
 
 type hermesEventStream struct {
