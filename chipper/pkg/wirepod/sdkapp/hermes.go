@@ -107,27 +107,36 @@ func HermesCaptureSnapshot(serial string) (HermesSnapshot, error) {
 		return HermesSnapshot{}, err
 	}
 	ctx, cancel := context.WithTimeout(robot.Ctx, hermesSnapshotTimeout)
-	if _, err := robot.Vector.Conn.EnableImageStreaming(ctx, &vectorpb.EnableImageStreamingRequest{Enable: true}); err != nil {
-		cancel()
-		return HermesSnapshot{}, err
-	}
-	defer func() {
-		// End the CameraFeed RPC before disabling the producer. Reversing this
-		// order leaves some Vector firmware revisions with a stuck feed client.
-		cancel()
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cleanupCancel()
-		_, _ = robot.Vector.Conn.EnableImageStreaming(cleanupCtx, &vectorpb.EnableImageStreamingRequest{Enable: false})
-	}()
-	stream, err := robot.Vector.Conn.CameraFeed(ctx, &vectorpb.CameraFeedRequest{})
+	defer cancel()
+	var image []byte
+	err = withHermesBehaviorControl(ctx, robot, func(actionCtx context.Context) error {
+		feedCtx, feedCancel := context.WithCancel(actionCtx)
+		if _, captureErr := robot.Vector.Conn.EnableImageStreaming(feedCtx, &vectorpb.EnableImageStreamingRequest{Enable: true}); captureErr != nil {
+			feedCancel()
+			return captureErr
+		}
+		defer func() {
+			// End the CameraFeed RPC before disabling the producer. Reversing this
+			// order leaves some Vector firmware revisions with a stuck feed client.
+			feedCancel()
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cleanupCancel()
+			_, _ = robot.Vector.Conn.EnableImageStreaming(cleanupCtx, &vectorpb.EnableImageStreamingRequest{Enable: false})
+		}()
+		stream, captureErr := robot.Vector.Conn.CameraFeed(feedCtx, &vectorpb.CameraFeedRequest{})
+		if captureErr != nil {
+			return captureErr
+		}
+		response, captureErr := stream.Recv()
+		if captureErr != nil {
+			return captureErr
+		}
+		image = append([]byte(nil), response.GetData()...)
+		return nil
+	})
 	if err != nil {
 		return HermesSnapshot{}, err
 	}
-	response, err := stream.Recv()
-	if err != nil {
-		return HermesSnapshot{}, err
-	}
-	image := response.GetData()
 	if len(image) < 4 || len(image) > 8*1024*1024 || image[0] != 0xff || image[1] != 0xd8 || image[2] != 0xff {
 		return HermesSnapshot{}, fmt.Errorf("Vector returned an invalid camera image")
 	}
