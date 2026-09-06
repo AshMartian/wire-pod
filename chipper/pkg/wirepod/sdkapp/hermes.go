@@ -110,24 +110,10 @@ func HermesCaptureSnapshot(serial string) (HermesSnapshot, error) {
 	defer cancel()
 	var image []byte
 	err = withHermesBehaviorControl(ctx, robot, func(actionCtx context.Context) error {
-		feedCtx, feedCancel := context.WithCancel(actionCtx)
-		if _, captureErr := robot.Vector.Conn.EnableImageStreaming(feedCtx, &vectorpb.EnableImageStreamingRequest{Enable: true}); captureErr != nil {
-			feedCancel()
-			return captureErr
-		}
-		defer func() {
-			// End the CameraFeed RPC before disabling the producer. Reversing this
-			// order leaves some Vector firmware revisions with a stuck feed client.
-			feedCancel()
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cleanupCancel()
-			_, _ = robot.Vector.Conn.EnableImageStreaming(cleanupCtx, &vectorpb.EnableImageStreamingRequest{Enable: false})
-		}()
-		stream, captureErr := robot.Vector.Conn.CameraFeed(feedCtx, &vectorpb.CameraFeedRequest{})
-		if captureErr != nil {
-			return captureErr
-		}
-		response, captureErr := stream.Recv()
+		// CaptureSingleImage is Vector's native one-shot primitive. It enables
+		// and disables its own default-resolution feed, avoiding a stranded
+		// long-lived CameraFeed stream between Hermes requests.
+		response, captureErr := robot.Vector.Conn.CaptureSingleImage(actionCtx, &vectorpb.CaptureSingleImageRequest{})
 		if captureErr != nil {
 			return captureErr
 		}
