@@ -47,12 +47,20 @@ type hermesEventStream struct {
 	cancel context.CancelFunc
 }
 
+type hermesTouchState struct {
+	baseline    uint32
+	initialized bool
+	consecutive int
+	active      bool
+}
+
 var hermesEventStreams = struct {
 	sync.Mutex
 	streams map[string]hermesEventStream
 	last    map[string]time.Time
 	edge    map[string]bool
-}{streams: make(map[string]hermesEventStream), last: make(map[string]time.Time), edge: make(map[string]bool)}
+	touch   map[string]hermesTouchState
+}{streams: make(map[string]hermesEventStream), last: make(map[string]time.Time), edge: make(map[string]bool), touch: make(map[string]hermesTouchState)}
 
 // StartHermesEvents consumes the Vector event stream once per robot and hands
 // safe face-related events to sink. It never blocks the SDK receive loop on a
@@ -80,6 +88,7 @@ func runHermesEvents(ctx context.Context, cancel context.CancelFunc, serial stri
 		hermesEventStreams.Lock()
 		delete(hermesEventStreams.streams, serial)
 		delete(hermesEventStreams.edge, serial)
+		delete(hermesEventStreams.touch, serial)
 		hermesEventStreams.Unlock()
 	}()
 	backoff := time.Second
@@ -111,6 +120,9 @@ func receiveHermesEvents(ctx context.Context, serial string, sink func(HermesRob
 	}
 	streamCtx, cancel := context.WithCancel(robot.Ctx)
 	defer cancel()
+	if err := enableHermesFaceDetection(streamCtx, robot); err != nil {
+		logger.Println("Hermes face detection could not be enabled:", err)
+	}
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -120,7 +132,7 @@ func receiveHermesEvents(ctx context.Context, serial string, sink func(HermesRob
 	}()
 	stream, err := robot.Vector.Conn.EventStream(streamCtx, &vectorpb.EventRequest{
 		ListType: &vectorpb.EventRequest_WhiteList{WhiteList: &vectorpb.FilterList{List: []string{
-			"robot_observed_face", "robot_changed_observed_face_id", "robot_state",
+			"robot_observed_face", "robot_changed_observed_face_id", "robot_state", "vision_modes_auto_disabled",
 		}}},
 		ConnectionId: "wirepod-hermes",
 	})
@@ -136,6 +148,15 @@ func receiveHermesEvents(ctx context.Context, serial string, sink func(HermesRob
 			if event.Type != "" {
 				sink(event)
 			}
+			if event := hermesTouchEventFromResponse(serial, response); event.Type != "" {
+				sink(event)
+			}
+			continue
+		}
+		if response.GetEvent().GetVisionModesAutoDisabled() != nil {
+			if err := enableHermesFaceDetection(streamCtx, robot); err != nil {
+				logger.Println("Hermes face detection could not be re-enabled:", err)
+			}
 			continue
 		}
 		event := hermesEventFromResponse(serial, response)
@@ -145,6 +166,14 @@ func receiveHermesEvents(ctx context.Context, serial string, sink func(HermesRob
 		sink(event)
 	}
 	return streamCtx.Err()
+}
+
+func enableHermesFaceDetection(ctx context.Context, robot Robot) error {
+	_, err := robot.Vector.Conn.EnableFaceDetection(ctx, &vectorpb.EnableFaceDetectionRequest{
+		Enable:                     true,
+		EnableExpressionEstimation: true,
+	})
+	return err
 }
 
 // hermesEdgeEventFromResponse turns a sustained cliff sensor assertion into a
@@ -164,6 +193,49 @@ func hermesEdgeEventFromResponse(serial string, response *vectorpb.EventResponse
 		return HermesRobotEvent{}, true
 	}
 	return HermesRobotEvent{Type: "wirepod.edge_detected", ESN: serial, Reason: "cliff_sensor", ObservedAt: time.Now().UnixMilli()}, true
+}
+
+// hermesTouchEventFromResponse emits one event for a deliberate, sustained
+// pet. The touch sensor is a noisy raw signal, so a baseline-relative threshold
+// and consecutive samples avoid turning incidental contact into agent turns.
+func hermesTouchEventFromResponse(serial string, response *vectorpb.EventResponse) HermesRobotEvent {
+	state := response.GetEvent().GetRobotState()
+	if state == nil {
+		return HermesRobotEvent{}
+	}
+	rawTouch := state.GetTouchData().GetRawTouchValue()
+	hermesEventStreams.Lock()
+	touch := hermesEventStreams.touch[serial]
+	if !touch.initialized {
+		touch.baseline = rawTouch
+		touch.initialized = true
+		hermesEventStreams.touch[serial] = touch
+		hermesEventStreams.Unlock()
+		return HermesRobotEvent{}
+	}
+	if rawTouch > touch.baseline+50 {
+		touch.consecutive++
+	} else {
+		touch.consecutive = 0
+		touch.active = false
+		// Let the baseline follow slow sensor drift while never adapting upward
+		// during a petting contact.
+		if rawTouch < touch.baseline {
+			touch.baseline = rawTouch
+		} else {
+			touch.baseline += (rawTouch - touch.baseline) / 8
+		}
+	}
+	shouldEmit := !touch.active && touch.consecutive >= 6
+	if shouldEmit {
+		touch.active = true
+	}
+	hermesEventStreams.touch[serial] = touch
+	hermesEventStreams.Unlock()
+	if !shouldEmit {
+		return HermesRobotEvent{}
+	}
+	return HermesRobotEvent{Type: "wirepod.touch_detected", ESN: serial, Reason: "touch_sensor", ObservedAt: time.Now().UnixMilli()}
 }
 
 func hermesEventsActive(serial string) bool {
@@ -196,7 +268,11 @@ func shouldForwardHermesEvent(event HermesRobotEvent) bool {
 	now := time.Now()
 	hermesEventStreams.Lock()
 	defer hermesEventStreams.Unlock()
-	if previous, ok := hermesEventStreams.last[key]; ok && now.Sub(previous) < 15*time.Second {
+	cooldown := 15 * time.Second
+	if event.Type == "wirepod.touch_detected" {
+		cooldown = 5 * time.Second
+	}
+	if previous, ok := hermesEventStreams.last[key]; ok && now.Sub(previous) < cooldown {
 		return false
 	}
 	hermesEventStreams.last[key] = now
