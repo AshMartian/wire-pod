@@ -23,6 +23,7 @@ type HermesAutonomyConfig struct {
 type hermesAutonomyState struct {
 	eligibleSince time.Time
 	emitted       bool
+	nightLogged   bool
 }
 
 var hermesAutonomy = struct {
@@ -88,12 +89,17 @@ func runHermesAutonomy(serial string, config HermesAutonomyConfig, sink func(Her
 		case now = <-ticker.C:
 		}
 		if !isAutonomyDaytime(now, config) {
+			if !state.nightLogged {
+				logger.Println(fmt.Sprintf("Hermes autonomy: %s waiting for daytime (local hour %02d; window %02d-%02d)", serial, now.Hour(), config.DayStartHour, config.NightStartHour))
+				state.nightLogged = true
+			}
 			if !state.eligibleSince.IsZero() {
 				logger.Println(fmt.Sprintf("Hermes autonomy: pausing %s for the nighttime exclusion", serial))
 			}
 			state.eligibleSince = time.Time{}
 			continue
 		}
+		state.nightLogged = false
 		observation, err := HermesObserve(serial)
 		if err != nil {
 			logger.Println(fmt.Sprintf("Hermes autonomy: observation unavailable for %s: %v", serial, err))
