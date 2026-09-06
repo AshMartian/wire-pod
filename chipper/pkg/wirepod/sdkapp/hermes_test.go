@@ -23,21 +23,19 @@ func TestHermesCommandValidationAllowsBoundedAutonomyPrimitives(t *testing.T) {
 	}
 }
 
-func TestHermesUndockRequiresEveryChargerGate(t *testing.T) {
+func TestHermesUndockRequiresFullVectorOnCharger(t *testing.T) {
 	fullOnCharger := &vectorpb.BatteryStateResponse{
 		BatteryLevel:        vectorpb.BatteryLevel_BATTERY_LEVEL_FULL,
-		IsCharging:          true,
 		IsOnChargerPlatform: true,
 	}
 	if !eligibleForHermesUndock(fullOnCharger) {
-		t.Fatal("rejected a full Vector that is charging on its charger")
+		t.Fatal("rejected a full Vector on its charger")
 	}
 
 	for name, battery := range map[string]*vectorpb.BatteryStateResponse{
 		"nil":            nil,
-		"not full":       {BatteryLevel: vectorpb.BatteryLevel_BATTERY_LEVEL_NOMINAL, IsCharging: true, IsOnChargerPlatform: true},
-		"not charging":   {BatteryLevel: vectorpb.BatteryLevel_BATTERY_LEVEL_FULL, IsOnChargerPlatform: true},
-		"not on charger": {BatteryLevel: vectorpb.BatteryLevel_BATTERY_LEVEL_FULL, IsCharging: true},
+		"not full":       {BatteryLevel: vectorpb.BatteryLevel_BATTERY_LEVEL_NOMINAL, IsOnChargerPlatform: true},
+		"not on charger": {BatteryLevel: vectorpb.BatteryLevel_BATTERY_LEVEL_FULL},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if eligibleForHermesUndock(battery) {

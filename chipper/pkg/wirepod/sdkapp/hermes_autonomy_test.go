@@ -6,14 +6,13 @@ import (
 )
 
 func TestAutonomyEligibilityRequiresExactFullChargedDockedState(t *testing.T) {
-	eligible := HermesObservation{BatteryLevel: "BATTERY_LEVEL_FULL", IsCharging: true, IsOnChargerPlatform: true}
+	eligible := HermesObservation{BatteryLevel: "BATTERY_LEVEL_FULL", IsOnChargerPlatform: true}
 	if !isAutonomyEligible(eligible) {
-		t.Fatal("expected a full, charging, docked Vector to be eligible")
+		t.Fatal("expected a full, docked Vector to be eligible")
 	}
 	for _, observation := range []HermesObservation{
-		{BatteryLevel: "BATTERY_LEVEL_NOMINAL", IsCharging: true, IsOnChargerPlatform: true},
-		{BatteryLevel: "BATTERY_LEVEL_FULL", IsCharging: false, IsOnChargerPlatform: true},
-		{BatteryLevel: "BATTERY_LEVEL_FULL", IsCharging: true, IsOnChargerPlatform: false},
+		{BatteryLevel: "BATTERY_LEVEL_NOMINAL", IsOnChargerPlatform: true},
+		{BatteryLevel: "BATTERY_LEVEL_FULL", IsOnChargerPlatform: false},
 	} {
 		if isAutonomyEligible(observation) {
 			t.Fatalf("accepted unsafe autonomy state: %+v", observation)

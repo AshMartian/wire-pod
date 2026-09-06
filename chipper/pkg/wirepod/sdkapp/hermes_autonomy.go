@@ -117,5 +117,5 @@ func isAutonomyDaytime(now time.Time, config HermesAutonomyConfig) bool {
 }
 
 func isAutonomyEligible(observation HermesObservation) bool {
-	return observation.BatteryLevel == "BATTERY_LEVEL_FULL" && observation.IsCharging && observation.IsOnChargerPlatform
+	return observation.BatteryLevel == "BATTERY_LEVEL_FULL" && observation.IsOnChargerPlatform
 }

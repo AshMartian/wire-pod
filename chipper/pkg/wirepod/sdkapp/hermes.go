@@ -88,8 +88,8 @@ func HermesObserve(serial string) (HermesObservation, error) {
 
 // HermesControl performs one bounded robot action. Drive, head, and lift
 // commands always receive a matching stop after at most two seconds. Undock is
-// deliberately available only to a full Vector that is actively charging on
-// its charger. Scan runs only native, in-place behaviours; it never drives.
+// deliberately available only to a full Vector that is physically on its
+// charger. Scan runs only native, in-place behaviours; it never drives.
 func HermesControl(serial string, command HermesCommand) (HermesCommandResult, error) {
 	hermesControl.Lock()
 	defer hermesControl.Unlock()
@@ -228,12 +228,12 @@ func ValidateHermesCommand(command HermesCommand) error {
 }
 
 // eligibleForHermesUndock intentionally has no voltage threshold or partial
-// charge exception. Autonomous charger departure is safe to attempt only when
-// the SDK reports all three explicit states at the instant before the action.
+// charge exception. A full Vector can report is_charging=false once its
+// charger enters maintenance mode, so autonomous charger departure requires
+// the two reliable terminal states at the instant before the action.
 func eligibleForHermesUndock(battery *vectorpb.BatteryStateResponse) bool {
 	return battery != nil &&
 		battery.GetBatteryLevel() == vectorpb.BatteryLevel_BATTERY_LEVEL_FULL &&
-		battery.GetIsCharging() &&
 		battery.GetIsOnChargerPlatform()
 }
 
