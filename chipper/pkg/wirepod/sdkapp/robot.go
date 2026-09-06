@@ -60,7 +60,8 @@ func newRobot(serial string) (Robot, int, error) {
 			} else {
 				RobotObj.GUID = robot.GUID
 			}
-			logger.Println("Connecting to " + serial + " with GUID " + RobotObj.GUID)
+			// Authentication material must never enter the browser-accessible debug log.
+			logger.Println("Connecting to " + serial)
 		}
 	}
 	if !matched {

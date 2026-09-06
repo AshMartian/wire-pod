@@ -43,6 +43,7 @@ func StartHermesAutonomy(serial string, config HermesAutonomyConfig, sink func(H
 	}
 	hermesAutonomy.active[serial] = struct{}{}
 	hermesAutonomy.Unlock()
+	logger.Println(fmt.Sprintf("Hermes autonomy: enabled for %s", serial))
 	go runHermesAutonomy(serial, config, sink)
 }
 
