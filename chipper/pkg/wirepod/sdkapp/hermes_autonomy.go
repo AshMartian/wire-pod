@@ -79,7 +79,14 @@ func runHermesAutonomy(serial string, config HermesAutonomyConfig, sink func(Her
 	state := hermesAutonomyState{}
 	ticker := time.NewTicker(config.PollInterval)
 	defer ticker.Stop()
-	for now := range ticker.C {
+	initial := time.NewTimer(0)
+	defer initial.Stop()
+	for {
+		var now time.Time
+		select {
+		case now = <-initial.C:
+		case now = <-ticker.C:
+		}
 		if !isAutonomyDaytime(now, config) {
 			if !state.eligibleSince.IsZero() {
 				logger.Println(fmt.Sprintf("Hermes autonomy: pausing %s for the nighttime exclusion", serial))
