@@ -1,9 +1,12 @@
 package sdkapp
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kercre123/wire-pod/chipper/pkg/logger"
 )
 
 // HermesAutonomyConfig controls the Pi-owned eligibility monitor. It never
@@ -77,22 +80,35 @@ func runHermesAutonomy(serial string, config HermesAutonomyConfig, sink func(Her
 	defer ticker.Stop()
 	for now := range ticker.C {
 		if !isAutonomyDaytime(now, config) {
+			if !state.eligibleSince.IsZero() {
+				logger.Println(fmt.Sprintf("Hermes autonomy: pausing %s for the nighttime exclusion", serial))
+			}
 			state.eligibleSince = time.Time{}
 			continue
 		}
 		observation, err := HermesObserve(serial)
-		if err != nil || !isAutonomyEligible(observation) {
+		if err != nil {
+			logger.Println(fmt.Sprintf("Hermes autonomy: observation unavailable for %s: %v", serial, err))
+			state = hermesAutonomyState{}
+			continue
+		}
+		if !isAutonomyEligible(observation) {
+			if !state.eligibleSince.IsZero() {
+				logger.Println(fmt.Sprintf("Hermes autonomy: %s is no longer full and docked; resetting eligibility", serial))
+			}
 			state = hermesAutonomyState{}
 			continue
 		}
 		if state.eligibleSince.IsZero() {
 			state.eligibleSince = now
+			logger.Println(fmt.Sprintf("Hermes autonomy: monitoring full, docked Vector %s for %s", serial, config.StableFor))
 			continue
 		}
 		if state.emitted || now.Sub(state.eligibleSince) < config.StableFor {
 			continue
 		}
 		state.emitted = true
+		logger.Println(fmt.Sprintf("Hermes autonomy: emitting full-charge readiness for %s", serial))
 		sink(HermesRobotEvent{
 			SchemaVersion: 1,
 			Type:          "wirepod.autonomy_ready",
