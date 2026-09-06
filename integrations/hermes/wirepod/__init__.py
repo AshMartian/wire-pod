@@ -14,6 +14,7 @@ from .schemas import (
     VECTOR_STOP,
     VECTOR_UNDOCK,
 )
+from .audit import make_hooks
 from .tools import BridgeConfig, vector_capture_image, vector_command, vector_observe, vector_status
 
 
@@ -23,7 +24,9 @@ def register(ctx) -> None:
         "bridge_token": ctx.get_config("bridge_token", default=""),
         "vector_esn": ctx.get_config("vector_esn", default=""),
         "timeout_seconds": ctx.get_config("timeout_seconds", default=5),
+        "operation_timeout_seconds": ctx.get_config("operation_timeout_seconds", default=35),
     }
+    on_pre_tool_call, on_post_tool_call = make_hooks(str(settings["vector_esn"]).strip())
 
     def handler(args: dict, **kwargs) -> str:
         del kwargs
@@ -65,3 +68,5 @@ def register(ctx) -> None:
     ctx.register_tool(name="vector_stop", toolset="wirepod", schema=VECTOR_STOP, handler=command_handler("stop"))
     ctx.register_tool(name="vector_undock", toolset="wirepod", schema=VECTOR_UNDOCK, handler=command_handler("undock"))
     ctx.register_tool(name="vector_scan", toolset="wirepod", schema=VECTOR_SCAN, handler=command_handler("scan"))
+    ctx.register_hook("pre_tool_call", on_pre_tool_call)
+    ctx.register_hook("post_tool_call", on_post_tool_call)

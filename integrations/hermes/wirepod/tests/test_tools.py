@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -36,6 +37,14 @@ class BridgeHandler(BaseHTTPRequestHandler):
             return
         if self.path != "/bridge/v1/robots/ESN-A/status":
             self.send_error(404)
+            return
+        if self.mode == "service_unavailable":
+            body = b"robot observation is temporarily unavailable"
+            self.send_response(503)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         body = json.dumps({"source_sha": "test-sha", "robot": {"esn": self.esn, "activated": True}}).encode()
         if self.mode == "trickle":
@@ -103,7 +112,13 @@ class ToolsTest(unittest.TestCase):
         cls.server.server_close()
 
     def config(self, **overrides):
-        values = {"bridge_url": f"http://127.0.0.1:{self.server.server_port}", "bridge_token": "test-token", "vector_esn": "ESN-A", "timeout_seconds": 2}
+        values = {
+            "bridge_url": f"http://127.0.0.1:{self.server.server_port}",
+            "bridge_token": "test-token",
+            "vector_esn": "ESN-A",
+            "timeout_seconds": 2,
+            "operation_timeout_seconds": 3,
+        }
         values.update(overrides)
         return BridgeConfig.from_settings(values)
 
@@ -126,6 +141,21 @@ class ToolsTest(unittest.TestCase):
             BridgeConfig.from_settings({"bridge_url": "file:///etc/passwd", "bridge_token": "x", "vector_esn": "ESN-A"})
         with self.assertRaisesRegex(ValueError, "between 1 and 15"):
             self.config(timeout_seconds=30)
+        with self.assertRaisesRegex(ValueError, "between 1 and 45"):
+            self.config(operation_timeout_seconds=60)
+
+    def test_commands_and_camera_use_the_long_operation_deadline(self):
+        config = self.config(timeout_seconds=1, operation_timeout_seconds=3)
+        with patch("wirepod.tools._request_json", return_value={"result": {"action": "stop"}}) as request_json:
+            vector_command({}, config, "stop")
+        self.assertEqual(request_json.call_args.kwargs["timeout_seconds"], 3)
+
+        with patch("wirepod.tools._request_json", return_value={"snapshot_id": BridgeHandler.snapshot_id}) as request_json, patch(
+            "wirepod.tools._request_image", return_value=BridgeHandler.image
+        ) as request_image:
+            vector_capture_image({}, config)
+        self.assertEqual(request_json.call_args.kwargs["timeout_seconds"], 3)
+        self.assertEqual(request_image.call_args.kwargs["timeout_seconds"], 3)
 
     def test_commands_are_profile_bound_and_bounded(self):
         result = json.loads(vector_command({"text": "hello"}, self.config(), "say"))
@@ -172,11 +202,18 @@ class ToolsTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "wire-pod bridge is unavailable")
 
+    def test_http_service_failure_is_distinguished_from_unreachable_bridge(self):
+        BridgeHandler.mode = "service_unavailable"
+        result = json.loads(vector_status({}, self.config()))
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "wire-pod bridge returned HTTP 503")
+
     def test_register_binds_a_profile_configured_tool(self):
         class Context:
             def __init__(self):
                 self.handlers = {}
                 self.schemas = {}
+                self.hooks = {}
 
             def get_config(self, name, default=""):
                 settings = {"bridge_url": f"http://127.0.0.1:{self_server.server_port}", "bridge_token": "test-token", "vector_esn": "ESN-A"}
@@ -186,6 +223,9 @@ class ToolsTest(unittest.TestCase):
                 self.handlers[kwargs["name"]] = kwargs["handler"]
                 self.schemas[kwargs["name"]] = kwargs["schema"]
 
+            def register_hook(self, name, handler):
+                self.hooks[name] = handler
+
         self_server = self.server
         context = Context()
         register(context)
@@ -194,9 +234,52 @@ class ToolsTest(unittest.TestCase):
         self.assertIn("vector_stop", context.handlers)
         self.assertEqual(context.schemas["vector_undock"]["parameters"]["properties"], {})
         self.assertEqual(context.schemas["vector_scan"]["parameters"]["properties"], {})
+        self.assertEqual(set(context.hooks), {"pre_tool_call", "post_tool_call"})
         result = json.loads(context.handlers["vector_status"]({"vector_esn": "model-supplied-value"}))
         self.assertTrue(result["ok"])
         self.assertEqual(result["robot"]["esn"], "ESN-A")
+
+    def test_audit_hooks_record_start_and_completion_without_sensitive_payloads(self):
+        class Context:
+            def __init__(self):
+                self.hooks = {}
+
+            def get_config(self, name, default=""):
+                settings = {"vector_esn": "ESN-A"}
+                return settings.get(name, default)
+
+            def register_tool(self, **kwargs):
+                pass
+
+            def register_hook(self, name, handler):
+                self.hooks[name] = handler
+
+        context = Context()
+        register(context)
+        with patch("wirepod.audit.logger.info") as info:
+            context.hooks["pre_tool_call"](
+                "vector_say",
+                {"text": "private check-in", "unexpected": "ignored"},
+                task_id="task-1",
+                tool_call_id="call-1",
+            )
+            context.hooks["post_tool_call"](
+                "vector_say",
+                {"text": "private check-in"},
+                '{"ok":true,"result":{"action":"say"}}',
+                task_id="task-1",
+                tool_call_id="call-1",
+                duration_ms=12.5,
+            )
+
+        records = [call.args[1] for call in info.call_args_list]
+        self.assertEqual(len(records), 2)
+        self.assertTrue(all(record.startswith("{") for record in records))
+        self.assertIn('"event":"started"', records[0])
+        self.assertIn('"event":"completed"', records[1])
+        self.assertIn('"text_chars":16', records[0])
+        self.assertNotIn("private check-in", "".join(records))
+        self.assertIn('"duration_ms":12.5', records[1])
 
 
 if __name__ == "__main__":

@@ -534,7 +534,7 @@ func SdkapiHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, robot)
 		return
 	case r.URL.Path == "/api-sdk/disconnect":
-		removeRobot(robotObj.ESN, "server")
+		removeRobot(robotObj.ESN)
 		fmt.Fprint(w, "done")
 		return
 	case r.URL.Path == "/api-sdk/trigger_wake_word":

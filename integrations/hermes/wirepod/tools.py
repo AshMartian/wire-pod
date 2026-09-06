@@ -19,6 +19,7 @@ class BridgeConfig:
     token: str
     esn: str
     timeout_seconds: int
+    operation_timeout_seconds: int
 
     @classmethod
     def from_settings(cls, settings: dict[str, Any]) -> "BridgeConfig":
@@ -29,6 +30,10 @@ class BridgeConfig:
             timeout = int(settings.get("timeout_seconds", 5))
         except (TypeError, ValueError):
             timeout = 5
+        try:
+            operation_timeout = int(settings.get("operation_timeout_seconds", 35))
+        except (TypeError, ValueError):
+            operation_timeout = 35
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("bridge_url must be an absolute HTTP(S) URL")
@@ -38,7 +43,15 @@ class BridgeConfig:
             raise ValueError("vector_esn is not configured")
         if not 1 <= timeout <= 15:
             raise ValueError("timeout_seconds must be between 1 and 15")
-        return cls(url=url, token=token, esn=esn, timeout_seconds=timeout)
+        if not 1 <= operation_timeout <= 45:
+            raise ValueError("operation_timeout_seconds must be between 1 and 45")
+        return cls(
+            url=url,
+            token=token,
+            esn=esn,
+            timeout_seconds=timeout,
+            operation_timeout_seconds=operation_timeout,
+        )
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -54,8 +67,8 @@ def vector_status(args: dict[str, Any], config: BridgeConfig) -> str:
     del args
     url = f"{config.url}/bridge/v1/robots/{quote(config.esn, safe='')}/status"
     payload = _request_json("GET", url, config)
-    if payload is None:
-        return json.dumps({"ok": False, "error": "wire-pod bridge is unavailable"})
+    if error := _request_error(payload, "wire-pod bridge is unavailable"):
+        return error
     if not isinstance(payload.get("robot"), dict):
         return json.dumps({"ok": False, "error": "wire-pod bridge returned an invalid response"})
     robot = payload["robot"]
@@ -69,8 +82,8 @@ def vector_observe(args: dict[str, Any], config: BridgeConfig) -> str:
     del args
     url = f"{config.url}/bridge/v1/robots/{quote(config.esn, safe='')}/observation"
     payload = _request_json("GET", url, config)
-    if payload is None:
-        return json.dumps({"ok": False, "error": "wire-pod bridge is unavailable"})
+    if error := _request_error(payload, "wire-pod bridge is unavailable"):
+        return error
     observation = payload.get("observation")
     if not isinstance(observation, dict):
         return json.dumps({"ok": False, "error": "wire-pod bridge returned an invalid observation"})
@@ -84,12 +97,14 @@ def vector_capture_image(args: dict[str, Any], config: BridgeConfig) -> dict[str
     if args and (not isinstance(snapshot_id, str) or len(snapshot_id) != 32 or any(character not in "0123456789abcdef" for character in snapshot_id)):
         return json.dumps({"ok": False, "error": "invalid camera snapshot reference"})
     if snapshot_id is None:
-        reference = _request_json("POST", base_url, config)
-        if reference is None or not isinstance(reference.get("snapshot_id"), str):
+        reference = _request_json("POST", base_url, config, timeout_seconds=config.operation_timeout_seconds)
+        if error := _request_error(reference, "Vector camera is unavailable"):
+            return error
+        if not isinstance(reference.get("snapshot_id"), str):
             return json.dumps({"ok": False, "error": "Vector camera is unavailable"})
         snapshot_id = reference["snapshot_id"]
     url = f"{base_url}/{snapshot_id}"
-    image = _request_image(url, config)
+    image = _request_image(url, config, timeout_seconds=config.operation_timeout_seconds)
     if image is None:
         return json.dumps({"ok": False, "error": "Vector camera is unavailable"})
     encoded = base64.b64encode(image).decode("ascii")
@@ -110,9 +125,9 @@ def vector_command(args: dict[str, Any], config: BridgeConfig, action: str) -> s
     if not _valid_command(command):
         return json.dumps({"ok": False, "error": "invalid bounded Vector command"})
     url = f"{config.url}/bridge/v1/robots/{quote(config.esn, safe='')}/commands"
-    payload = _request_json("POST", url, config, command)
-    if payload is None:
-        return json.dumps({"ok": False, "error": "wire-pod bridge is unavailable"})
+    payload = _request_json("POST", url, config, command, timeout_seconds=config.operation_timeout_seconds)
+    if error := _request_error(payload, "wire-pod bridge is unavailable"):
+        return error
     result = payload.get("result")
     if not isinstance(result, dict) or result.get("action") != action:
         return json.dumps({"ok": False, "error": "wire-pod bridge returned an invalid command result"})
@@ -133,10 +148,26 @@ def _valid_command(command: dict[str, Any]) -> bool:
     return action in {"stop", "undock", "scan"} and set(command) == {"action"}
 
 
-def _request_json(method: str, url: str, config: BridgeConfig, body: dict[str, Any] | None = None) -> dict[str, Any] | None:
+def _request_error(payload: dict[str, Any] | None, unavailable_message: str) -> str | None:
+    if payload is None:
+        return json.dumps({"ok": False, "error": unavailable_message})
+    error = payload.get("_wirepod_error")
+    if isinstance(error, str):
+        return json.dumps({"ok": False, "error": error})
+    return None
+
+
+def _request_json(
+    method: str,
+    url: str,
+    config: BridgeConfig,
+    body: dict[str, Any] | None = None,
+    *,
+    timeout_seconds: int | None = None,
+) -> dict[str, Any] | None:
     encoded = json.dumps(body, separators=(",", ":")).encode() if body is not None else None
     request = Request(url, data=encoded, method=method, headers={"Accept": "application/json", "Authorization": f"Bearer {config.token}", "Content-Type": "application/json"})
-    deadline = time.monotonic() + config.timeout_seconds
+    deadline = time.monotonic() + (timeout_seconds or config.timeout_seconds)
     try:
         with build_opener(NoRedirect()).open(request, timeout=_remaining_timeout(deadline)) as response:
             if response.status not in {200, 201, 202}:
@@ -144,7 +175,7 @@ def _request_json(method: str, url: str, config: BridgeConfig, body: dict[str, A
             payload = json.loads(_read_bounded(response, deadline))
     except HTTPError as error:
         try:
-            return None
+            return {"_wirepod_error": f"wire-pod bridge returned HTTP {error.code}"}
         finally:
             error.close()
     except (HTTPException, URLError, TimeoutError, ValueError, OSError):
@@ -152,9 +183,9 @@ def _request_json(method: str, url: str, config: BridgeConfig, body: dict[str, A
     return payload if isinstance(payload, dict) else None
 
 
-def _request_image(url: str, config: BridgeConfig) -> bytes | None:
+def _request_image(url: str, config: BridgeConfig, *, timeout_seconds: int | None = None) -> bytes | None:
     request = Request(url, method="GET", headers={"Accept": "image/jpeg", "Authorization": f"Bearer {config.token}"})
-    deadline = time.monotonic() + config.timeout_seconds
+    deadline = time.monotonic() + (timeout_seconds or config.timeout_seconds)
     try:
         with build_opener(NoRedirect()).open(request, timeout=_remaining_timeout(deadline)) as response:
             if response.status != 200 or response.headers.get_content_type() != "image/jpeg":

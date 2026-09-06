@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/digital-dream-labs/hugh/grpc/client"
@@ -16,7 +16,7 @@ import (
 )
 
 var robots []Robot
-var timerStopIndexes []int
+var robotsMu sync.RWMutex
 var inhibitCreation bool
 
 type Robot struct {
@@ -108,12 +108,14 @@ func newRobot(serial string) (Robot, int, error) {
 	RobotObj.EventsStreaming = false
 
 	// we have confirmed robot connection works, append to list of bots
+	robotsMu.Lock()
 	robots = append(robots, RobotObj)
 	registered = true
 	robotIndex := len(robots) - 1
+	robotsMu.Unlock()
 
 	// begin inactivity timer
-	go connTimer(robotIndex)
+	go connTimer(RobotObj.ESN)
 
 	inhibitCreation = false
 	return RobotObj, robotIndex, nil
@@ -127,59 +129,66 @@ func getRobot(serial string) (Robot, int, error) {
 		}
 		time.Sleep(time.Second / 2)
 	}
+	robotsMu.RLock()
 	for index, robot := range robots {
 		if strings.EqualFold(serial, robot.ESN) {
+			robotsMu.RUnlock()
 			return robot, index, nil
 		}
 	}
+	robotsMu.RUnlock()
 	return newRobot(serial)
 }
 
-// if connection is inactive for more than 5 minutes, remove robot
-// run this as a goroutine
-func connTimer(ind int) {
-	// Check if the index is in the list
-	if len(robots) <= ind {
-		return
-	}
-
-	robots[ind].ConnTimer = 0
+// If connection is inactive for more than five minutes, remove the robot.
+// The timer tracks the ESN rather than a slice index: removing one robot
+// compacts the slice and can otherwise make a sibling timer panic or operate
+// on the wrong robot.
+func connTimer(serial string) {
+	serial = strings.ToLower(strings.TrimSpace(serial))
 	for {
 		time.Sleep(time.Second)
+		robotsMu.Lock()
+		ind := robotIndexLocked(serial)
+		if ind < 0 {
+			robotsMu.Unlock()
+			return
+		}
 		// A subscribed Hermes event stream is itself ongoing SDK activity. Keep
 		// the connection alive so face-event delivery does not disappear after
 		// five minutes of otherwise quiet robot time.
-		if hermesEventsActive(robots[ind].ESN) {
+		if hermesEventsActive(serial) {
 			robots[ind].ConnTimer = 0
+			robotsMu.Unlock()
 			continue
 		}
-		// check if timer needs to be stopped
-		for _, num := range timerStopIndexes {
-			if num == ind {
-				logger.Println("Conn timer for robot index " + strconv.Itoa(ind) + " stopping")
-				var newIndexes []int
-				for _, num := range timerStopIndexes {
-					if num != ind {
-						newIndexes = append(newIndexes, num)
-					}
-				}
-				timerStopIndexes = newIndexes
-				return
-			}
-		}
 		if robots[ind].ConnTimer >= 300 {
-			logger.Println("Closing SDK connection for " + robots[ind].ESN + ", source: connTimer")
-			removeRobot(robots[ind].ESN, "connTimer")
+			serial = robots[ind].ESN
+			robotsMu.Unlock()
+			logger.Println("Closing SDK connection for " + serial + ", source: connTimer")
+			removeRobot(serial)
 			return
 		}
 		robots[ind].ConnTimer = robots[ind].ConnTimer + 1
+		robotsMu.Unlock()
 	}
 }
 
-func removeRobot(serial, source string) {
+func robotIndexLocked(serial string) int {
+	for index, robot := range robots {
+		if strings.EqualFold(serial, robot.ESN) {
+			return index
+		}
+	}
+	return -1
+}
+
+func removeRobot(serial string) {
 	cliffStreams.stop(serial)
 	inhibitCreation = true
 	var newRobots []Robot
+	removed := false
+	robotsMu.Lock()
 	for ind, robot := range robots {
 		if !strings.EqualFold(serial, robot.ESN) {
 			newRobots = append(newRobots, robot)
@@ -187,17 +196,19 @@ func removeRobot(serial, source string) {
 			if robot.Cancel != nil {
 				robot.Cancel()
 			}
-			if source == "server" {
-				timerStopIndexes = append(timerStopIndexes, ind)
-			}
 			robots[ind].CamStreaming = false
 			robots[ind].EventsStreaming = false
 			robots[ind].BcAssumption = false
-			// give time for all of that to stop
-			time.Sleep(time.Second * 3)
+			removed = true
 		}
 	}
 	robots = newRobots
+	robotsMu.Unlock()
+	if removed {
+		// Give event and camera streams time to stop after the registry no longer
+		// exposes the connection. Do not hold robotsMu while waiting.
+		time.Sleep(time.Second * 3)
+	}
 	inhibitCreation = false
 }
 

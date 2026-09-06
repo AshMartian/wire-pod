@@ -42,6 +42,24 @@ WirePod transcribes the knowledge-graph request, posts only that text to the mat
 
 All bridge routes require `Authorization: Bearer <profile token>`, apply `Cache-Control: no-store`, and restrict the token to its own ESN. A cross-ESN request receives `403`; robot network addresses and GUIDs are never returned.
 
+Every `vector_*` tool call is also recorded by the Hermes plugin's
+`pre_tool_call` and `post_tool_call` hooks as a `WIREPOD_TOOL_AUDIT` structured
+log entry in that profile's Hermes agent log. The entry includes the profile's
+ESN, tool name, bounded motion parameters, outcome, duration, and available
+turn/tool correlation IDs. Speech text, bearer tokens, face data, and camera
+bytes are intentionally omitted; malformed model calls that never reach a
+handler remain covered by Hermes's own tool-executor error log.
+
+The plugin manifest advertises all ten tools, including the multimodal
+`vector_capture_image` tool. Bridge HTTP failures retain their status class in
+the tool result (for example, HTTP 503 means the bridge answered but the robot
+operation was temporarily unavailable; DNS/socket failures remain bridge
+unavailable). Read-only requests use the short `timeout_seconds` deadline;
+control and camera requests use `operation_timeout_seconds` (default 35
+seconds, maximum 45) so the client deadline covers the bridge's 30-second
+undock/scan SDK operations and cannot abandon a command while WirePod is still
+holding its behavior-control lease.
+
 | Route | Purpose |
 | --- | --- |
 | `GET /bridge/v1/robots` | Durable enrollment state for the profile's Vector. |
@@ -59,7 +77,7 @@ The command body is one of:
 {"action":"stop"}
 ```
 
-Wheel speeds are limited to ±200 mm/s; head/lift speeds to ±2 rad/s; moving commands run from 50–2000 ms and receive their stop before the default-priority Vector behavior-control lease is released. Commands are serialized per WirePod process, so a newer action cannot cancel another axis's safety stop. These are wheel controls, not autonomous navigation: named locations need an explicit map/pose safety contract before they are exposed.
+Wheel speeds are limited to ±200 mm/s; head/lift speeds to ±2 rad/s; moving commands run from 50–2000 ms and receive their stop before the default-priority Vector behavior-control lease is released. Commands are serialized per WirePod process, so a newer action cannot cancel another axis's safety stop. Connection inactivity timers are keyed by ESN rather than mutable robot-slice indexes, so disconnecting one enrolled Vector cannot panic the gateway or retarget another timer. These are wheel controls, not autonomous navigation: named locations need an explicit map/pose safety contract before they are exposed.
 
 ## Identity and memory
 
