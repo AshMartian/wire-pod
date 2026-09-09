@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -31,7 +32,7 @@ type conversationMessage struct {
 
 type conversationReasoning struct {
 	Enabled bool   `json:"enabled"`
-	Effort  string `json:"effort"`
+	Effort  string `json:"effort,omitempty"`
 }
 
 type conversationRequest struct {
@@ -102,9 +103,11 @@ func HermesConversationStream(ctx context.Context, esn, transcript string, onChu
 		Stream:   true,
 		Messages: []conversationMessage{{Role: "system", Content: "You are replying through one Vector's speaker. Be concise, warm, and truthful. Preserve its separate identity and consent-sensitive memory rules. WirePod will speak your final text, so do not call robot speech or motion tools unless the user explicitly asks for an embodied action."}, {Role: "user", Content: transcript}},
 	}
-	// Hermes passes this explicit setting to LM Studio. Keeping it in the
-	// request prevents a future global profile default from slowing robot turns.
-	conversation.ModelOptions.Reasoning = conversationReasoning{Enabled: true, Effort: "low"}
+	// Qwen's native thinking mode consumes the first part of a short completion
+	// before it emits anything speakable. Disable it for the real-time Vector
+	// voice path; background/event turns retain each profile's normal reasoning
+	// policy and can take the time they need.
+	conversation.ModelOptions.Reasoning = conversationReasoning{Enabled: false}
 	payload, err := json.Marshal(conversation)
 	if err != nil {
 		return "", true, false, err
@@ -126,7 +129,7 @@ func HermesConversationStream(ctx context.Context, esn, transcript string, onChu
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return "", true, false, errors.New("Hermes conversation request failed")
+		return "", true, false, fmt.Errorf("Hermes conversation returned HTTP %d", response.StatusCode)
 	}
 	if strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
 		answer, err := readHermesSSE(response.Body, onChunk)

@@ -44,7 +44,7 @@ func TestHermesConversationStreamEmitsBoundedSentenceChunks(t *testing.T) {
 				Reasoning conversationReasoning `json:"reasoning"`
 			} `json:"model_options"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || !request.Stream || request.ModelOptions.Reasoning != (conversationReasoning{Enabled: true, Effort: "low"}) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || !request.Stream || request.ModelOptions.Reasoning != (conversationReasoning{Enabled: false}) {
 			http.Error(w, "streaming was not requested", http.StatusBadRequest)
 			return
 		}
