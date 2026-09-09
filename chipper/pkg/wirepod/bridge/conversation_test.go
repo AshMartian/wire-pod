@@ -35,6 +35,20 @@ func TestHermesConversationUsesScopedDailySessionAndMemoryKey(t *testing.T) {
 	}
 }
 
+func TestHermesVoicePromptRequiresBoundedEmbodiedActionChain(t *testing.T) {
+	for _, requirement := range []string{
+		"Call vector_observe",
+		"vector_capture_image",
+		"vector_drive",
+		"vector_say",
+		"Only report physical results returned by successful tools",
+	} {
+		if !strings.Contains(hermesVoiceSystemPrompt, requirement) {
+			t.Fatalf("voice prompt is missing action-chain requirement %q", requirement)
+		}
+	}
+}
+
 func TestHermesConversationStreamEmitsBoundedSentenceChunks(t *testing.T) {
 	const key = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

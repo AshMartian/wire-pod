@@ -35,7 +35,11 @@ VECTOR_CAPTURE_IMAGE = {
 
 VECTOR_SAY = {
     "name": "vector_say",
-    "description": "Have this profile's Vector speak a short, user-safe sentence through its Vector voice.",
+    "description": (
+        "Have this profile's Vector speak a short, user-safe sentence through its Vector voice. "
+        "Use when the human explicitly asks Vector to say, tell, or announce specific words; "
+        "do not use it merely to duplicate your final response."
+    ),
     "parameters": {
         "type": "object",
         "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 280}},
@@ -47,8 +51,10 @@ VECTOR_SAY = {
 VECTOR_DRIVE = {
     "name": "vector_drive",
     "description": (
-        "Drive this Vector for a short bounded interval. Use only when the route is clear; motion stops automatically. "
-        "This is wheel control, not autonomous navigation to a named location."
+        "Drive this Vector for one short bounded interval. Before wheel motion, use vector_observe and, when available, "
+        "vector_capture_image to check the immediate route. For a direct ‘come here’ or ‘move closer’ request in the approved "
+        "enclosed area, use a conservative short forward step toward the current facing direction, then re-observe. Motion stops "
+        "automatically. This is wheel control, not autonomous navigation to a named location or person."
     ),
     "parameters": {
         "type": "object",
