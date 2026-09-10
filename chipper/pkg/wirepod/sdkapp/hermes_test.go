@@ -1,8 +1,6 @@
 package sdkapp
 
 import (
-	"context"
-	"errors"
 	"testing"
 
 	"github.com/fforchino/vector-go-sdk/pkg/vectorpb"
@@ -14,20 +12,6 @@ func TestHermesCommandValidationRejectsUnsafeMotion(t *testing.T) {
 	}
 	if err := ValidateHermesCommand(HermesCommand{Action: "head", SpeedRadPerSec: 1, DurationMS: 49}); err == nil {
 		t.Fatal("accepted unsafe motion duration")
-	}
-}
-
-func TestHermesScanTreatsOnlyItsBoundedDeadlineAsCompletion(t *testing.T) {
-	deadline := context.DeadlineExceeded
-	if err := boundedScanResult(true, deadline); err != nil {
-		t.Fatal("a started bounded scan must complete at its own deadline")
-	}
-	controlFailure := errors.New("behavior denied")
-	if err := boundedScanResult(true, controlFailure); !errors.Is(err, controlFailure) {
-		t.Fatal("a real behavior-control failure must not be treated as scan completion")
-	}
-	if err := boundedScanResult(false, deadline); !errors.Is(err, deadline) {
-		t.Fatal("an unstarted scan must not claim completion")
 	}
 }
 

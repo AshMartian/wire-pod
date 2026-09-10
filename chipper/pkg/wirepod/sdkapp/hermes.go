@@ -3,7 +3,6 @@ package sdkapp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -47,10 +46,10 @@ const (
 	hermesSpeechTimeout   = 20 * time.Second
 	hermesMotionTimeout   = 8 * time.Second
 	hermesUndockTimeout   = 30 * time.Second
-	// LookAroundInPlace is a long-running native behaviour. Hermes deliberately
-	// owns it for only this short window, then releases control; otherwise an
-	// intentional scan ends as a misleading 30-second bridge failure.
-	hermesScanTimeout   = 4 * time.Second
+	// A scan is a short, in-place head sweep. LookAroundInPlace is an
+	// unbounded native behavior on Vector 1.0 and cannot provide a truthful
+	// command completion result to an external agent.
+	hermesScanTimeout   = 6 * time.Second
 	maxHermesWheelMMPS  = 200
 	maxHermesMotionMS   = 2000
 	maxHermesJointRadPS = 2
@@ -236,27 +235,27 @@ func HermesControl(serial string, command HermesCommand) (HermesCommandResult, e
 		})
 		return HermesCommandResult{Action: action}, err
 	case "scan":
-		started := false
 		err = withHermesBehaviorControl(ctx, robot, func(actionCtx context.Context) error {
-			// This behaviour continues until its context is cancelled. The
-			// persistent Hermes event stream already performs face detection, so
-			// do not follow it with another long-running FindFaces request.
-			started = true
-			_, actionErr := robot.Vector.Conn.LookAroundInPlace(actionCtx, &vectorpb.LookAroundInPlaceRequest{})
-			return actionErr
+			// Face detection is handled continuously by the Hermes event stream.
+			// Sweep the head rather than invoking Vector's unbounded look-around
+			// behavior, which cannot return before the bridge deadline.
+			for _, speed := range []float32{1, -1} {
+				if _, actionErr := robot.Vector.Conn.MoveHead(actionCtx, &vectorpb.MoveHeadRequest{SpeedRadPerSec: speed}); actionErr != nil {
+					return actionErr
+				}
+				if actionErr := waitThenStop(actionCtx, 700, func(stopCtx context.Context) error {
+					_, stopErr := robot.Vector.Conn.MoveHead(stopCtx, &vectorpb.MoveHeadRequest{})
+					return stopErr
+				}); actionErr != nil {
+					return actionErr
+				}
+			}
+			return nil
 		})
-		err = boundedScanResult(started, err)
 		return HermesCommandResult{Action: action}, err
 	default:
 		return HermesCommandResult{}, fmt.Errorf("unsupported Hermes action")
 	}
-}
-
-func boundedScanResult(started bool, err error) error {
-	if started && errors.Is(err, context.DeadlineExceeded) {
-		return nil
-	}
-	return err
 }
 
 // ValidateHermesCommand validates the public control contract before any SDK
