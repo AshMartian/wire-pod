@@ -226,7 +226,7 @@ func readHermesSSE(reader io.Reader, onChunk func(string) error) (string, error)
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", errors.New("invalid Hermes conversation response")
+		return "", fmt.Errorf("Hermes stream read failed: %w", err)
 	}
 	if !done {
 		return "", errors.New("incomplete Hermes conversation stream")

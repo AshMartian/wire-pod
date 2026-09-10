@@ -14,6 +14,8 @@ import (
 	ttr "github.com/kercre123/wire-pod/chipper/pkg/wirepod/ttr"
 )
 
+const hermesIntentFallbackSpeechMaxDelay = 15 * time.Second
+
 // This is here for compatibility with 1.6 and older software
 func (s *Server) ProcessIntent(req *vtt.IntentRequest) (*vtt.IntentResponse, error) {
 	var successMatched bool
@@ -72,6 +74,7 @@ func (s *Server) ProcessIntent(req *vtt.IntentRequest) (*vtt.IntentResponse, err
 }
 
 func replyFromHermesIntent(serial, text string) bool {
+	started := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
 	defer cancel()
 	spokeChunk := false
@@ -88,10 +91,12 @@ func replyFromHermesIntent(serial, text string) bool {
 	}
 	if err != nil {
 		logger.Println("Hermes intent request failed: " + err.Error())
-		if !spokeChunk {
+		if !spokeChunk && shouldSpeakHermesIntentFallback(started, time.Now()) {
 			if speakErr := speakHermesIntentReply(serial, "I’m sorry, I’m having trouble thinking right now. Please try again shortly."); speakErr != nil {
 				logger.Println("Hermes intent fallback speech failed: " + speakErr.Error())
 			}
+		} else if !spokeChunk {
+			logger.Println("Suppressing stale Hermes intent fallback speech")
 		}
 		return true
 	}
@@ -104,6 +109,14 @@ func replyFromHermesIntent(serial, text string) bool {
 		}
 	}
 	return true
+}
+
+// shouldSpeakHermesIntentFallback prevents an abandoned or delayed speech
+// request from startling someone with an error long after they stopped talking.
+// Healthy streaming turns emit their first speakable chunk well inside this
+// window; an immediate failure still receives useful audible feedback.
+func shouldSpeakHermesIntentFallback(started, now time.Time) bool {
+	return !started.IsZero() && !now.Before(started) && now.Sub(started) <= hermesIntentFallbackSpeechMaxDelay
 }
 
 func speakHermesIntentReply(serial, text string) error {
