@@ -3,6 +3,7 @@ package sdkapp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -46,10 +47,13 @@ const (
 	hermesSpeechTimeout   = 20 * time.Second
 	hermesMotionTimeout   = 8 * time.Second
 	hermesUndockTimeout   = 30 * time.Second
-	hermesScanTimeout     = 30 * time.Second
-	maxHermesWheelMMPS    = 200
-	maxHermesMotionMS     = 2000
-	maxHermesJointRadPS   = 2
+	// LookAroundInPlace is a long-running native behaviour. Hermes deliberately
+	// owns it for only this short window, then releases control; otherwise an
+	// intentional scan ends as a misleading 30-second bridge failure.
+	hermesScanTimeout   = 4 * time.Second
+	maxHermesWheelMMPS  = 200
+	maxHermesMotionMS   = 2000
+	maxHermesJointRadPS = 2
 )
 
 // HermesSnapshot is a fresh camera image captured solely for the owning Hermes
@@ -232,17 +236,27 @@ func HermesControl(serial string, command HermesCommand) (HermesCommandResult, e
 		})
 		return HermesCommandResult{Action: action}, err
 	case "scan":
+		started := false
 		err = withHermesBehaviorControl(ctx, robot, func(actionCtx context.Context) error {
-			if _, actionErr := robot.Vector.Conn.LookAroundInPlace(actionCtx, &vectorpb.LookAroundInPlaceRequest{}); actionErr != nil {
-				return actionErr
-			}
-			_, actionErr := robot.Vector.Conn.FindFaces(actionCtx, &vectorpb.FindFacesRequest{})
+			// This behaviour continues until its context is cancelled. The
+			// persistent Hermes event stream already performs face detection, so
+			// do not follow it with another long-running FindFaces request.
+			started = true
+			_, actionErr := robot.Vector.Conn.LookAroundInPlace(actionCtx, &vectorpb.LookAroundInPlaceRequest{})
 			return actionErr
 		})
+		err = boundedScanResult(started, err)
 		return HermesCommandResult{Action: action}, err
 	default:
 		return HermesCommandResult{}, fmt.Errorf("unsupported Hermes action")
 	}
+}
+
+func boundedScanResult(started bool, err error) error {
+	if started && errors.Is(err, context.DeadlineExceeded) {
+		return nil
+	}
+	return err
 }
 
 // ValidateHermesCommand validates the public control contract before any SDK
