@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/fforchino/vector-go-sdk/pkg/vectorpb"
-	"github.com/kercre123/wire-pod/chipper/pkg/logger"
 )
 
 // HermesCommand is the deliberately small motion and expression vocabulary
@@ -87,10 +87,12 @@ const hermesProcessingAnimation = "anim_knowledgegraph_searching_01"
 // spoken chunk takes the shared behavior-control lock, preventing the cue from
 // delaying Vector's first answer.
 type HermesProcessingIndicator struct {
-	serial string
-	cancel context.CancelFunc
-	done   chan struct{}
-	stop   sync.Once
+	serial     string
+	cancel     context.CancelFunc
+	done       chan struct{}
+	dispatched chan struct{}
+	stop       sync.Once
+	dispatch   sync.Once
 }
 
 var hermesProcessingIndicators = struct {
@@ -105,7 +107,12 @@ var hermesProcessingIndicators = struct {
 func StartHermesProcessing(serial string) *HermesProcessingIndicator {
 	serial = strings.ToLower(strings.TrimSpace(serial))
 	ctx, cancel := context.WithCancel(context.Background())
-	indicator := &HermesProcessingIndicator{serial: serial, cancel: cancel, done: make(chan struct{})}
+	indicator := &HermesProcessingIndicator{
+		serial:     serial,
+		cancel:     cancel,
+		done:       make(chan struct{}),
+		dispatched: make(chan struct{}),
+	}
 
 	hermesProcessingIndicators.Lock()
 	if prior := hermesProcessingIndicators.active[serial]; prior != nil {
@@ -115,7 +122,22 @@ func StartHermesProcessing(serial string) *HermesProcessingIndicator {
 	hermesProcessingIndicators.Unlock()
 
 	go indicator.run(ctx)
+	// Do not race a fast Hermes response against a goroutine which has not yet
+	// submitted the visible cue. A bounded wait keeps voice latency intact if
+	// Vector is unavailable or another behavior currently owns the robot.
+	select {
+	case <-indicator.dispatched:
+	case <-indicator.done:
+	case <-time.After(750 * time.Millisecond):
+	}
 	return indicator
+}
+
+func (indicator *HermesProcessingIndicator) markDispatched() {
+	indicator.dispatch.Do(func() {
+		close(indicator.dispatched)
+		log.Printf("Hermes processing cue dispatched for %s", indicator.serial)
+	})
 }
 
 func (indicator *HermesProcessingIndicator) run(ctx context.Context) {
@@ -130,13 +152,14 @@ func (indicator *HermesProcessingIndicator) run(ctx context.Context) {
 
 	robot, _, err := getRobot(indicator.serial)
 	if err != nil {
-		logger.Println("Hermes processing indicator unavailable for " + indicator.serial + ": " + err.Error())
+		log.Printf("Hermes processing indicator unavailable for %s: %v", indicator.serial, err)
 		return
 	}
 	for ctx.Err() == nil {
 		actionCtx, cancel := context.WithTimeout(ctx, hermesProcessingTimeout)
 		hermesControl.Lock()
-		err = withHermesBehaviorControl(actionCtx, robot, func(controlCtx context.Context) error {
+		err = withHermesBehaviorControlPriority(actionCtx, robot, vectorpb.ControlRequest_OVERRIDE_BEHAVIORS, func(controlCtx context.Context) error {
+			indicator.markDispatched()
 			_, actionErr := robot.Vector.Conn.PlayAnimation(controlCtx, &vectorpb.PlayAnimationRequest{
 				Animation: &vectorpb.Animation{Name: hermesProcessingAnimation},
 				Loops:     1,
@@ -149,7 +172,7 @@ func (indicator *HermesProcessingIndicator) run(ctx context.Context) {
 			return
 		}
 		if err != nil {
-			logger.Println("Hermes processing indicator failed for " + indicator.serial + ": " + err.Error())
+			log.Printf("Hermes processing indicator failed for %s: %v", indicator.serial, err)
 			return
 		}
 		select {
@@ -169,6 +192,7 @@ func (indicator *HermesProcessingIndicator) Stop() {
 	}
 	indicator.stop.Do(func() {
 		indicator.cancel()
+		log.Printf("Hermes processing cue stop requested for %s", indicator.serial)
 		select {
 		case <-indicator.done:
 		case <-time.After(500 * time.Millisecond):
@@ -455,11 +479,15 @@ func driveWheels(ctx context.Context, robot Robot, left, right int) error {
 }
 
 func withHermesBehaviorControl(ctx context.Context, robot Robot, action func(context.Context) error) (result error) {
+	return withHermesBehaviorControlPriority(ctx, robot, vectorpb.ControlRequest_DEFAULT, action)
+}
+
+func withHermesBehaviorControlPriority(ctx context.Context, robot Robot, priority vectorpb.ControlRequest_Priority, action func(context.Context) error) (result error) {
 	stream, err := robot.Vector.Conn.BehaviorControl(ctx)
 	if err != nil {
 		return err
 	}
-	if err = stream.Send(&vectorpb.BehaviorControlRequest{RequestType: &vectorpb.BehaviorControlRequest_ControlRequest{ControlRequest: &vectorpb.ControlRequest{Priority: vectorpb.ControlRequest_DEFAULT}}}); err != nil {
+	if err = stream.Send(&vectorpb.BehaviorControlRequest{RequestType: &vectorpb.BehaviorControlRequest_ControlRequest{ControlRequest: &vectorpb.ControlRequest{Priority: priority}}}); err != nil {
 		return err
 	}
 	for {
