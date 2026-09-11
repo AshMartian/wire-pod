@@ -72,8 +72,10 @@ func newWebhookForwarder(target webhookTarget, prepare func(sdkapp.HermesRobotEv
 func (f *webhookForwarder) enqueue(event sdkapp.HermesRobotEvent) {
 	select {
 	case f.queue <- event:
+		recordActivity("wirepod_to_hermes", event.ESN, "robot_event", event.Type, "queued", 0)
 	default:
 		logger.Println("Hermes webhook queue is full; dropping a coalesced robot event")
+		recordActivity("wirepod_to_hermes", event.ESN, "robot_event", event.Type, "dropped", 0)
 	}
 }
 
@@ -84,6 +86,7 @@ func (f *webhookForwarder) run() {
 }
 
 func (f *webhookForwarder) deliver(event sdkapp.HermesRobotEvent) {
+	started := time.Now()
 	if f.prepare != nil {
 		event = f.prepare(event)
 	}
@@ -114,7 +117,14 @@ func (f *webhookForwarder) deliver(event sdkapp.HermesRobotEvent) {
 	response, err := f.client.Do(request)
 	if err == nil && response != nil {
 		response.Body.Close()
+		if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
+			recordActivity("wirepod_to_hermes", event.ESN, "robot_event", event.Type, "delivered", time.Since(started))
+		} else {
+			recordActivity("wirepod_to_hermes", event.ESN, "robot_event", event.Type, "rejected", time.Since(started))
+		}
+		return
 	}
+	recordActivity("wirepod_to_hermes", event.ESN, "robot_event", event.Type, "failed", time.Since(started))
 }
 
 func stringifyTimestamp(timestamp int64) string {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kercre123/wire-pod/chipper/pkg/vars"
 	"github.com/kercre123/wire-pod/chipper/pkg/wirepod/sdkapp"
@@ -238,24 +239,71 @@ func (s *Server) robots() ([]robot, error) {
 }
 
 func (s *Server) command(esn string, command sdkapp.HermesCommand) (sdkapp.HermesCommandResult, error) {
+	started := time.Now()
+	detail := commandActivityDetail(command)
+	recordActivity("hermes_to_wirepod", esn, "robot_command", detail, "requested", 0)
+	var result sdkapp.HermesCommandResult
+	var err error
 	if s.control != nil {
-		return s.control(esn, command)
+		result, err = s.control(esn, command)
+	} else {
+		result, err = sdkapp.HermesControl(esn, command)
 	}
-	return sdkapp.HermesControl(esn, command)
+	if err != nil {
+		recordActivity("wirepod_to_hermes", esn, "robot_command", detail, "failed", time.Since(started))
+		return result, err
+	}
+	recordActivity("wirepod_to_hermes", esn, "robot_command", detail, "accepted", time.Since(started))
+	return result, nil
 }
 
 func (s *Server) observation(esn string) (sdkapp.HermesObservation, error) {
+	started := time.Now()
+	recordActivity("hermes_to_wirepod", esn, "observation", "live state requested", "requested", 0)
+	var observation sdkapp.HermesObservation
+	var err error
 	if s.observe != nil {
-		return s.observe(esn)
+		observation, err = s.observe(esn)
+	} else {
+		observation, err = sdkapp.HermesObserve(esn)
 	}
-	return sdkapp.HermesObserve(esn)
+	if err != nil {
+		recordActivity("wirepod_to_hermes", esn, "observation", "live state", "failed", time.Since(started))
+		return observation, err
+	}
+	recordActivity("wirepod_to_hermes", esn, "observation", "live state", "returned", time.Since(started))
+	return observation, nil
 }
 
 func (s *Server) captureSnapshot(esn string) (sdkapp.HermesSnapshot, error) {
+	started := time.Now()
+	recordActivity("hermes_to_wirepod", esn, "camera_snapshot", "fresh image requested", "requested", 0)
+	var snapshot sdkapp.HermesSnapshot
+	var err error
 	if s.capture != nil {
-		return s.capture(esn)
+		snapshot, err = s.capture(esn)
+	} else {
+		snapshot, err = sdkapp.HermesCaptureSnapshot(esn)
 	}
-	return sdkapp.HermesCaptureSnapshot(esn)
+	if err != nil {
+		recordActivity("wirepod_to_hermes", esn, "camera_snapshot", "fresh image", "failed", time.Since(started))
+		return snapshot, err
+	}
+	recordActivity("wirepod_to_hermes", esn, "camera_snapshot", "fresh image", "returned", time.Since(started))
+	return snapshot, nil
+}
+
+func commandActivityDetail(command sdkapp.HermesCommand) string {
+	switch command.Action {
+	case "say":
+		return "speech command (content withheld)"
+	case "express":
+		return "expression: " + command.Expression
+	case "drive", "head", "lift":
+		return "bounded " + command.Action
+	default:
+		return command.Action
+	}
 }
 
 func (s *Server) authorized(r *http.Request) (string, bool) {

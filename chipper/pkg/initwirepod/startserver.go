@@ -90,6 +90,7 @@ func BeginWirepodSpecific(sttInitFunc func() error, sttHandlerFunc interface{}, 
 	vars.Init()
 	serviceHealth = health.New(vars.CommitSHA)
 	serviceHealth.Register(http.DefaultServeMux)
+	bridge.RegisterActivityFeed(http.DefaultServeMux)
 	bridge.RegisterFromEnv(http.DefaultServeMux, vars.CommitSHA)
 	initSpeech := func() error {
 		serviceHealth.Speech(vars.APIConfig.PastInitialSetup, false)

@@ -40,6 +40,10 @@ WirePod transcribes the knowledge-graph request, posts only that text to the mat
 
 While a configured Hermes voice request is in flight, WirePod itself plays Vector's native knowledge-graph searching cue. It is a best-effort, non-speaking, wheel-stationary status signal—not an agent tool call—and it is cancelled before the first streamed sentence or completed non-streaming reply is spoken. A newer request from the same Vector replaces the previous cue. If the robot is unavailable, the cue failure is logged and the Hermes request still proceeds.
 
+## Operator trace
+
+`/hermes.html` includes a live **Bridge trace** timeline backed by `GET /api-sdk/hermes_activity?limit=60`. It is an in-memory, newest-first ring of at most 160 metadata-only entries and resets when WirePod restarts. It shows the profile-scoped Vector ESN, direction, event/action class, outcome, and elapsed time for voice turns, signed robot events, commands, observations, and camera requests. It never records or returns transcripts, synthesized speech text, face labels or IDs, camera bytes, webhook bodies, URLs, credentials, or signatures. The Hermes Fleet page is an operator console on the local WirePod host; keep the host UI on the trusted local network.
+
 ## Bridge API
 
 All bridge routes require `Authorization: Bearer <profile token>`, apply `Cache-Control: no-store`, and restrict the token to its own ESN. A cross-ESN request receives `403`; robot network addresses and GUIDs are never returned.

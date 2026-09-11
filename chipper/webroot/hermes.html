@@ -42,6 +42,19 @@
       <article class="loading">Looking for Vector bodies…</article>
     </section>
 
+    <section class="activity" aria-labelledby="activity-heading">
+      <div class="activity-head">
+        <div>
+          <p class="eyebrow">BRIDGE TRACE</p>
+          <h2 id="activity-heading">The conversation between worlds</h2>
+        </div>
+        <p>Live, bounded metadata from WirePod’s bridge. Speech, face labels, camera frames, credentials, and webhook payloads are deliberately withheld.</p>
+      </div>
+      <ol id="activity-feed" class="activity-feed" aria-live="polite">
+        <li class="activity-empty">Waiting for Hermes bridge activity…</li>
+      </ol>
+    </section>
+
     <section class="ritual">
       <div class="ritual-mark">✦</div>
       <div>
@@ -89,6 +102,16 @@
       </div>
       <a class="operator" href="#">Operator controls <b>→</b></a>
     </article>
+  </template>
+  <template id="activity-item">
+    <li class="activity-item">
+      <span class="activity-direction"></span>
+      <div class="activity-copy">
+        <div><strong class="activity-kind"></strong><span class="activity-detail"></span></div>
+        <small class="activity-meta"></small>
+      </div>
+      <span class="activity-outcome"></span>
+    </li>
   </template>
   <script src="js/hermes.js"></script>
 </body>

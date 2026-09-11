@@ -180,6 +180,8 @@ func HermesConversationStream(ctx context.Context, esn, transcript string, onChu
 		return "", true, false, errors.New("invalid Vector transcript")
 	}
 	cleanESN := strings.ToLower(strings.TrimSpace(esn))
+	started := time.Now()
+	recordActivity("wirepod_to_hermes", cleanESN, "voice_turn", "transcript forwarded (content withheld)", "requested", 0)
 	requestCtx, turn := beginHermesConversationTurn(ctx, cleanESN)
 	defer endHermesConversationTurn(cleanESN, turn)
 	// This is a WirePod-owned acknowledgement, not an agent-selected
@@ -214,12 +216,15 @@ func HermesConversationStream(ctx context.Context, esn, transcript string, onChu
 	response, err := client.Do(request)
 	if err != nil {
 		if turn.wasSuperseded() {
+			recordActivity("hermes_to_wirepod", cleanESN, "voice_reply", "reply cancelled by newer voice turn", "superseded", time.Since(started))
 			return "", true, false, ErrHermesConversationSuperseded
 		}
+		recordActivity("hermes_to_wirepod", cleanESN, "voice_reply", "reply transport", "failed", time.Since(started))
 		return "", true, false, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		recordActivity("hermes_to_wirepod", cleanESN, "voice_reply", "reply HTTP status", "rejected", time.Since(started))
 		return "", true, false, fmt.Errorf("Hermes conversation returned HTTP %d", response.StatusCode)
 	}
 	if strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
@@ -232,26 +237,34 @@ func HermesConversationStream(ctx context.Context, esn, transcript string, onChu
 		})
 		if err != nil {
 			if turn.wasSuperseded() {
+				recordActivity("hermes_to_wirepod", cleanESN, "voice_reply", "streamed reply", "superseded", time.Since(started))
 				return "", true, true, ErrHermesConversationSuperseded
 			}
+			recordActivity("hermes_to_wirepod", cleanESN, "voice_reply", "streamed reply", "failed", time.Since(started))
 			return "", true, true, err
 		}
 		if turn.wasSuperseded() {
+			recordActivity("hermes_to_wirepod", cleanESN, "voice_reply", "streamed reply", "superseded", time.Since(started))
 			return "", true, true, ErrHermesConversationSuperseded
 		}
+		recordActivity("hermes_to_wirepod", cleanESN, "voice_reply", "streamed reply", "received", time.Since(started))
 		return truncateRunes(answer, 480), true, true, nil
 	}
 	answer, err = readHermesJSON(response.Body)
 	processing.Stop()
 	if err != nil {
 		if turn.wasSuperseded() {
+			recordActivity("hermes_to_wirepod", cleanESN, "voice_reply", "reply", "superseded", time.Since(started))
 			return "", true, false, ErrHermesConversationSuperseded
 		}
+		recordActivity("hermes_to_wirepod", cleanESN, "voice_reply", "reply", "failed", time.Since(started))
 		return "", true, false, err
 	}
 	if turn.wasSuperseded() {
+		recordActivity("hermes_to_wirepod", cleanESN, "voice_reply", "reply", "superseded", time.Since(started))
 		return "", true, false, ErrHermesConversationSuperseded
 	}
+	recordActivity("hermes_to_wirepod", cleanESN, "voice_reply", "reply", "received", time.Since(started))
 	return truncateRunes(answer, 480), true, false, nil
 }
 
