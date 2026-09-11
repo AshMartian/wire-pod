@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/fforchino/vector-go-sdk/pkg/vectorpb"
+	"github.com/kercre123/wire-pod/chipper/pkg/logger"
 )
 
 // HermesCommand is the deliberately small motion and expression vocabulary
@@ -47,6 +48,9 @@ const (
 	hermesSnapshotTimeout   = 10 * time.Second
 	hermesSpeechTimeout     = 20 * time.Second
 	hermesExpressionTimeout = 12 * time.Second
+	// A processing cue must yield quickly when a response arrives. It is not a
+	// user-visible command and never gets the longer expression deadline.
+	hermesProcessingTimeout = 4 * time.Second
 	hermesMotionTimeout     = 8 * time.Second
 	hermesUndockTimeout     = 30 * time.Second
 	// A scan is a short, in-place head sweep. LookAroundInPlace is an
@@ -70,6 +74,106 @@ var hermesExpressions = map[string]string{
 	"happy":        "anim_onboarding_reacttoface_happy_01",
 	"sad":          "anim_feedback_meanwords_01",
 	"thinking":     "anim_explorer_scan_short_04",
+}
+
+const hermesProcessingAnimation = "anim_knowledgegraph_searching_01"
+
+// HermesProcessingIndicator owns the short-lived native activity cue shown
+// while WirePod waits for a Hermes voice response. It is deliberately not a
+// Hermes tool: the agent must not spend a tool call or choose an animation just
+// to acknowledge that its own request is still in flight.
+//
+// Stop is idempotent. It cancels the active SDK operation before the next
+// spoken chunk takes the shared behavior-control lock, preventing the cue from
+// delaying Vector's first answer.
+type HermesProcessingIndicator struct {
+	serial string
+	cancel context.CancelFunc
+	done   chan struct{}
+	stop   sync.Once
+}
+
+var hermesProcessingIndicators = struct {
+	sync.Mutex
+	active map[string]*HermesProcessingIndicator
+}{active: make(map[string]*HermesProcessingIndicator)}
+
+// StartHermesProcessing starts a best-effort, native searching animation while
+// one Vector waits on its configured Hermes profile. It neither speaks nor
+// moves the wheels. At most one indicator may be active for an ESN; a newer
+// voice turn cancels the older one.
+func StartHermesProcessing(serial string) *HermesProcessingIndicator {
+	serial = strings.ToLower(strings.TrimSpace(serial))
+	ctx, cancel := context.WithCancel(context.Background())
+	indicator := &HermesProcessingIndicator{serial: serial, cancel: cancel, done: make(chan struct{})}
+
+	hermesProcessingIndicators.Lock()
+	if prior := hermesProcessingIndicators.active[serial]; prior != nil {
+		prior.cancel()
+	}
+	hermesProcessingIndicators.active[serial] = indicator
+	hermesProcessingIndicators.Unlock()
+
+	go indicator.run(ctx)
+	return indicator
+}
+
+func (indicator *HermesProcessingIndicator) run(ctx context.Context) {
+	defer close(indicator.done)
+	defer func() {
+		hermesProcessingIndicators.Lock()
+		if hermesProcessingIndicators.active[indicator.serial] == indicator {
+			delete(hermesProcessingIndicators.active, indicator.serial)
+		}
+		hermesProcessingIndicators.Unlock()
+	}()
+
+	robot, _, err := getRobot(indicator.serial)
+	if err != nil {
+		logger.Println("Hermes processing indicator unavailable for " + indicator.serial + ": " + err.Error())
+		return
+	}
+	for ctx.Err() == nil {
+		actionCtx, cancel := context.WithTimeout(ctx, hermesProcessingTimeout)
+		hermesControl.Lock()
+		err = withHermesBehaviorControl(actionCtx, robot, func(controlCtx context.Context) error {
+			_, actionErr := robot.Vector.Conn.PlayAnimation(controlCtx, &vectorpb.PlayAnimationRequest{
+				Animation: &vectorpb.Animation{Name: hermesProcessingAnimation},
+				Loops:     1,
+			})
+			return actionErr
+		})
+		hermesControl.Unlock()
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			logger.Println("Hermes processing indicator failed for " + indicator.serial + ": " + err.Error())
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+// Stop ends this turn's activity cue. Do not make a healthy spoken reply wait
+// forever for a disconnected robot; cancellation normally closes done at once,
+// while the bounded fallback leaves the caller free to continue its turn.
+func (indicator *HermesProcessingIndicator) Stop() {
+	if indicator == nil {
+		return
+	}
+	indicator.stop.Do(func() {
+		indicator.cancel()
+		select {
+		case <-indicator.done:
+		case <-time.After(500 * time.Millisecond):
+		}
+	})
 }
 
 // HermesSnapshot is a fresh camera image captured solely for the owning Hermes

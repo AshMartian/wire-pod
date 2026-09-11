@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kercre123/wire-pod/chipper/pkg/wirepod/sdkapp"
 )
 
 const hermesConversationEnv = "WIREPOD_HERMES_CONVERSATIONS"
@@ -59,6 +61,16 @@ var ErrHermesConversationSuperseded = errors.New("Hermes conversation superseded
 type hermesConversationTurn struct {
 	cancel     context.CancelFunc
 	superseded bool
+}
+
+type hermesProcessingCue interface {
+	Stop()
+}
+
+// Kept behind this narrow seam so conversation lifecycle tests prove that a
+// visible activity cue cannot be stranded on an HTTP or stream failure.
+var startHermesProcessing = func(esn string) hermesProcessingCue {
+	return sdkapp.StartHermesProcessing(esn)
 }
 
 // Only one live voice turn per Vector is allowed. Hermes's OpenAI-compatible
@@ -170,6 +182,11 @@ func HermesConversationStream(ctx context.Context, esn, transcript string, onChu
 	cleanESN := strings.ToLower(strings.TrimSpace(esn))
 	requestCtx, turn := beginHermesConversationTurn(ctx, cleanESN)
 	defer endHermesConversationTurn(cleanESN, turn)
+	// This is a WirePod-owned acknowledgement, not an agent-selected
+	// expression. It covers both intent fallthrough and knowledge-graph voice
+	// requests, and is stopped before any answer is spoken.
+	processing := startHermesProcessing(cleanESN)
+	defer processing.Stop()
 	conversation := conversationRequest{
 		Model:    target.Model,
 		Stream:   true,
@@ -206,7 +223,13 @@ func HermesConversationStream(ctx context.Context, esn, transcript string, onChu
 		return "", true, false, fmt.Errorf("Hermes conversation returned HTTP %d", response.StatusCode)
 	}
 	if strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
-		answer, err := readHermesSSE(response.Body, onChunk)
+		answer, err := readHermesSSE(response.Body, func(chunk string) error {
+			processing.Stop()
+			if onChunk == nil {
+				return nil
+			}
+			return onChunk(chunk)
+		})
 		if err != nil {
 			if turn.wasSuperseded() {
 				return "", true, true, ErrHermesConversationSuperseded
@@ -219,6 +242,7 @@ func HermesConversationStream(ctx context.Context, esn, transcript string, onChu
 		return truncateRunes(answer, 480), true, true, nil
 	}
 	answer, err = readHermesJSON(response.Body)
+	processing.Stop()
 	if err != nil {
 		if turn.wasSuperseded() {
 			return "", true, false, ErrHermesConversationSuperseded

@@ -7,10 +7,49 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+type testHermesProcessingCue struct {
+	stops atomic.Int32
+	once  sync.Once
+}
+
+func (cue *testHermesProcessingCue) Stop() {
+	cue.once.Do(func() { cue.stops.Add(1) })
+}
+
+func TestHermesConversationStopsProcessingCueOnHTTPFailure(t *testing.T) {
+	const key = "dddddddddddddddddddddddddddddddd"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "busy", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	t.Setenv(hermesConversationEnv, `{"esn-a":{"url":"`+server.URL+`","key":"`+key+`","model":"vector-n8a4"}}`)
+
+	originalStart := startHermesProcessing
+	defer func() { startHermesProcessing = originalStart }()
+	var startedESN string
+	cue := &testHermesProcessingCue{}
+	startHermesProcessing = func(esn string) hermesProcessingCue {
+		startedESN = esn
+		return cue
+	}
+
+	_, configured, err := HermesConversation(context.Background(), "ESN-A", "hello")
+	if !configured || err == nil {
+		t.Fatalf("expected configured HTTP failure, configured=%v err=%v", configured, err)
+	}
+	if startedESN != "esn-a" {
+		t.Fatalf("processing cue used wrong ESN: %q", startedESN)
+	}
+	if got := cue.stops.Load(); got != 1 {
+		t.Fatalf("processing cue was not stopped exactly once: %d", got)
+	}
+}
 
 func TestHermesConversationUsesScopedDailySessionAndMemoryKey(t *testing.T) {
 	const key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
