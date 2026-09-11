@@ -52,6 +52,13 @@ func TestActivityFeedIsNoStoreAndRejectsWrites(t *testing.T) {
 	}
 }
 
+func TestActivityFeedUsesAnEmptyArrayInsteadOfNull(t *testing.T) {
+	isolate := isolatedActivityJournal(t)
+	if entries := isolate.snapshot(10); entries == nil || len(entries) != 0 {
+		t.Fatalf("empty activity snapshot must be a JSON array: %#v", entries)
+	}
+}
+
 func TestBridgeSpeechActivityWithholdsSpeechContent(t *testing.T) {
 	journal := isolatedActivityJournal(t)
 	server := &Server{control: func(esn string, command sdkapp.HermesCommand) (sdkapp.HermesCommandResult, error) {

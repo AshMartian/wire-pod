@@ -64,6 +64,9 @@ func (journal *activityJournal) snapshot(limit int) []ActivityEntry {
 	}
 	journal.Lock()
 	defer journal.Unlock()
+	if len(journal.entries) == 0 {
+		return []ActivityEntry{}
+	}
 	start := len(journal.entries) - limit
 	if start < 0 {
 		start = 0
