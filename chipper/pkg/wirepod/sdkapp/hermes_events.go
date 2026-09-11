@@ -26,6 +26,7 @@ type HermesRobotEvent struct {
 	OldFaceID     int32                      `json:"old_face_id,omitempty"`
 	NewFaceID     int32                      `json:"new_face_id,omitempty"`
 	Reason        string                     `json:"reason,omitempty"`
+	Message       string                     `json:"message,omitempty"`
 	SnapshotID    string                     `json:"snapshot_id,omitempty"`
 	CapturedAt    int64                      `json:"captured_at_unix_ms,omitempty"`
 	SnapshotUntil int64                      `json:"snapshot_expires_at_unix_ms,omitempty"`
@@ -235,7 +236,13 @@ func hermesTouchEventFromResponse(serial string, response *vectorpb.EventRespons
 	if !shouldEmit {
 		return HermesRobotEvent{}
 	}
-	return HermesRobotEvent{Type: "wirepod.touch_detected", ESN: serial, Reason: "touch_sensor", ObservedAt: time.Now().UnixMilli()}
+	return HermesRobotEvent{
+		Type:       "wirepod.touch_detected",
+		ESN:        serial,
+		Reason:     "touch_sensor",
+		Message:    "You're being loved!",
+		ObservedAt: time.Now().UnixMilli(),
+	}
 }
 
 func hermesEventsActive(serial string) bool {
@@ -270,7 +277,10 @@ func shouldForwardHermesEvent(event HermesRobotEvent) bool {
 	defer hermesEventStreams.Unlock()
 	cooldown := 15 * time.Second
 	if event.Type == "wirepod.touch_detected" {
-		cooldown = 5 * time.Second
+		// Affection should arrive as a meaningful event, not a stream of model
+		// turns while someone is petting the robot. A renewed pet can still be
+		// noticed after the current agent turn has had time to act or respond.
+		cooldown = 20 * time.Second
 	}
 	if previous, ok := hermesEventStreams.last[key]; ok && now.Sub(previous) < cooldown {
 		return false

@@ -115,7 +115,7 @@ func (s *Server) cameraVault() *cameraSnapshotVault {
 }
 
 func (s *Server) attachEventSnapshot(event sdkapp.HermesRobotEvent) sdkapp.HermesRobotEvent {
-	if event.Type != "wirepod.face_observed" && event.Type != "wirepod.face_recognized" && event.Type != "wirepod.edge_detected" {
+	if event.Type != "wirepod.face_observed" && event.Type != "wirepod.face_recognized" && event.Type != "wirepod.edge_detected" && event.Type != "wirepod.touch_detected" {
 		return event
 	}
 	reference, ok := s.captureAndStore(event.ESN)

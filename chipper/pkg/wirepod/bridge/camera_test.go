@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"testing"
 	"time"
+
+	"github.com/kercre123/wire-pod/chipper/pkg/wirepod/sdkapp"
 )
 
 func TestCameraSnapshotVaultExpiresAndBoundsFrames(t *testing.T) {
@@ -40,5 +42,30 @@ func TestCameraSnapshotVaultExpiresAndBoundsFrames(t *testing.T) {
 	}
 	if _, ok := vault.get("esn-a", first.ID); ok {
 		t.Fatal("vault retained more than its bounded frame count")
+	}
+}
+
+func TestTouchEventReceivesAnEventAssociatedSnapshot(t *testing.T) {
+	image := []byte{0xff, 0xd8, 0xff, 0xe0, 0x01, 0xff, 0xd9}
+	server := &Server{
+		capture: func(esn string) (sdkapp.HermesSnapshot, error) {
+			if esn != "esn-a" {
+				t.Fatalf("capture used wrong Vector scope %q", esn)
+			}
+			return sdkapp.HermesSnapshot{JPEG: image}, nil
+		},
+		snapshots: newCameraSnapshotVault(),
+	}
+	event := server.attachEventSnapshot(sdkapp.HermesRobotEvent{
+		Type: "wirepod.touch_detected", ESN: "esn-a", Message: "You're being loved!",
+	})
+	if event.SnapshotID == "" || event.CapturedAt == 0 || event.SnapshotUntil <= event.CapturedAt {
+		t.Fatalf("touch event did not receive a valid snapshot reference: %+v", event)
+	}
+	if event.Message != "You're being loved!" {
+		t.Fatalf("touch message changed: %q", event.Message)
+	}
+	if _, ok := server.snapshots.get("other-esn", event.SnapshotID); ok {
+		t.Fatal("touch snapshot crossed Vector scope")
 	}
 }

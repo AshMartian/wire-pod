@@ -65,7 +65,7 @@ func TestHermesTouchEventRequiresSustainedBaselineRelativeContact(t *testing.T) 
 		}
 	}
 	event := hermesTouchEventFromResponse(serial, hermesRobotStateWithTouch(151))
-	if event.Type != "wirepod.touch_detected" || event.Reason != "touch_sensor" {
+	if event.Type != "wirepod.touch_detected" || event.Reason != "touch_sensor" || event.Message != "You're being loved!" {
 		t.Fatalf("sustained touch did not emit the expected event: %+v", event)
 	}
 	if event := hermesTouchEventFromResponse(serial, hermesRobotStateWithTouch(151)); event.Type != "" {

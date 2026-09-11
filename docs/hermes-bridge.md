@@ -13,7 +13,9 @@ Vector knowledge-graph request → profile-scoped Hermes API → Vector speech
 
 Vector face events are coalesced for fifteen seconds per face/type before they reach Hermes. The event payload contains only a Vector ESN, event type, face ID, optional user-assigned face name, expression, and timestamp. Camera frames, landmark geometry, robot IPs, and SDK GUIDs never leave the Pi through this contract.
 
-Supported events are `wirepod.face_observed`, `wirepod.face_recognized`, and `wirepod.face_identity_updated`. A recognised name comes from Vector's enrolled-face store; Hermes must never infer a person's identity from an unknown face.
+Supported events are `wirepod.face_observed`, `wirepod.face_recognized`, `wirepod.face_identity_updated`, `wirepod.edge_detected`, `wirepod.touch_detected`, and `wirepod.autonomy_ready`. A recognised name comes from Vector's enrolled-face store; Hermes must never infer a person's identity from an unknown face.
+
+A deliberate, sustained pet creates one `wirepod.touch_detected` event at most once every twenty seconds per Vector. WirePod captures a fresh JPEG before it delivers the signed event, puts a short-lived profile-scoped snapshot reference on the event, and includes the literal message `You're being loved!`. The webhook must immediately call `vector_capture_image` with that reference, which attaches the exact frame to the receiving Hermes turn. The raw frame is not embedded in the webhook or persisted by WirePod.
 
 ## Provisioning
 
@@ -119,7 +121,7 @@ docker run --rm -v "$PWD:/src:ro" -w /src/chipper wire-pod-toolchain:go1.22.4 \
   go test -race -count=1 -tags nolibopusfile ./pkg/wirepod/bridge ./pkg/wirepod/sdkapp
 ```
 
-Live acceptance needs each profile to observe only its own Vector; short speech and drive commands to work and stop; a signed webhook test to receive `202`; an invalid signature to receive `401`; and a real face event to produce one profile-scoped Hermes run without exposing camera imagery.
+Live acceptance needs each profile to observe only its own Vector; short speech and drive commands to work and stop; a signed webhook test to receive `202`; an invalid signature to receive `401`; a real face event to produce one profile-scoped Hermes run; and a sustained pet to produce one `You're being loved!` turn with its event-associated camera frame attached.
 
 ## Local Whisper transcription
 
