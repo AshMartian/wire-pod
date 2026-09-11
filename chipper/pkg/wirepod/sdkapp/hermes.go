@@ -17,6 +17,7 @@ import (
 type HermesCommand struct {
 	Action         string `json:"action"`
 	Text           string `json:"text,omitempty"`
+	Expression     string `json:"expression,omitempty"`
 	LeftWheelMMPS  int    `json:"left_wheel_mmps,omitempty"`
 	RightWheelMMPS int    `json:"right_wheel_mmps,omitempty"`
 	SpeedRadPerSec int    `json:"speed_rad_per_sec,omitempty"`
@@ -25,6 +26,7 @@ type HermesCommand struct {
 
 type HermesCommandResult struct {
 	Action        string `json:"action"`
+	Expression    string `json:"expression,omitempty"`
 	StopScheduled bool   `json:"stop_scheduled"`
 }
 
@@ -41,11 +43,12 @@ var hermesControl = struct {
 }{}
 
 const (
-	hermesObserveTimeout  = 5 * time.Second
-	hermesSnapshotTimeout = 10 * time.Second
-	hermesSpeechTimeout   = 20 * time.Second
-	hermesMotionTimeout   = 8 * time.Second
-	hermesUndockTimeout   = 30 * time.Second
+	hermesObserveTimeout    = 5 * time.Second
+	hermesSnapshotTimeout   = 10 * time.Second
+	hermesSpeechTimeout     = 20 * time.Second
+	hermesExpressionTimeout = 12 * time.Second
+	hermesMotionTimeout     = 8 * time.Second
+	hermesUndockTimeout     = 30 * time.Second
 	// A scan is a short, in-place head sweep. LookAroundInPlace is an
 	// unbounded native behavior on Vector 1.0 and cannot provide a truthful
 	// command completion result to an external agent.
@@ -54,6 +57,20 @@ const (
 	maxHermesMotionMS   = 2000
 	maxHermesJointRadPS = 2
 )
+
+// hermesExpressions is intentionally a small semantic vocabulary rather than
+// a pass-through of firmware animation names. This lets an external agent
+// express itself without gaining arbitrary SDK/firmware control.
+var hermesExpressions = map[string]string{
+	"affectionate": "anim_feedback_iloveyou_02",
+	"celebrate":    "anim_pounce_success_03",
+	"confused":     "anim_meetvictor_lookface_timeout_01",
+	"curious":      "anim_observing_self_absorbed_01",
+	"excited":      "anim_blackjack_victorwin_01",
+	"happy":        "anim_onboarding_reacttoface_happy_01",
+	"sad":          "anim_feedback_meanwords_01",
+	"thinking":     "anim_explorer_scan_short_04",
+}
 
 // HermesSnapshot is a fresh camera image captured solely for the owning Hermes
 // profile. It is intentionally an in-memory value: the bridge streams it with
@@ -152,6 +169,8 @@ func HermesControl(serial string, command HermesCommand) (HermesCommandResult, e
 	switch action {
 	case "say":
 		timeout = hermesSpeechTimeout
+	case "express":
+		timeout = hermesExpressionTimeout
 	case "undock":
 		timeout = hermesUndockTimeout
 	case "scan":
@@ -170,6 +189,20 @@ func HermesControl(serial string, command HermesCommand) (HermesCommandResult, e
 			return actionErr
 		})
 		return HermesCommandResult{Action: action}, err
+	case "express":
+		expression := strings.ToLower(strings.TrimSpace(command.Expression))
+		animation, ok := hermesExpressions[expression]
+		if !ok {
+			return HermesCommandResult{}, fmt.Errorf("unsupported Hermes expression")
+		}
+		err = withHermesBehaviorControl(ctx, robot, func(actionCtx context.Context) error {
+			_, actionErr := robot.Vector.Conn.PlayAnimation(actionCtx, &vectorpb.PlayAnimationRequest{
+				Animation: &vectorpb.Animation{Name: animation},
+				Loops:     1,
+			})
+			return actionErr
+		})
+		return HermesCommandResult{Action: action, Expression: expression}, err
 	case "drive":
 		if !validMotion(command.LeftWheelMMPS, command.RightWheelMMPS, command.DurationMS) {
 			return HermesCommandResult{}, fmt.Errorf("drive values exceed the bounded control range")
@@ -275,6 +308,11 @@ func ValidateHermesCommand(command HermesCommand) error {
 	case "head", "lift":
 		if !validJointMotion(command.SpeedRadPerSec, command.DurationMS) {
 			return fmt.Errorf("joint values exceed the bounded control range")
+		}
+	case "express":
+		expression := strings.ToLower(strings.TrimSpace(command.Expression))
+		if _, ok := hermesExpressions[expression]; !ok {
+			return fmt.Errorf("unsupported Hermes expression")
 		}
 	case "stop", "undock", "scan":
 	default:

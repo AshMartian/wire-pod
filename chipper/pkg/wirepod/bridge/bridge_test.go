@@ -143,6 +143,32 @@ func TestBridgeCommandIsScopedAndPassesOnlyDecodedAction(t *testing.T) {
 	}
 }
 
+func TestBridgeExpressionIsScopedToTheCuratedCatalog(t *testing.T) {
+	mux := http.NewServeMux()
+	called := false
+	server := &Server{credentials: []credential{{esn: "ESN-A", token: []byte(tokenA)}}, sourceSHA: "test-sha", snapshot: func() ([]robot, error) {
+		return []robot{{ESN: "ESN-A", Activated: true}}, nil
+	}, control: func(esn string, command sdkapp.HermesCommand) (sdkapp.HermesCommandResult, error) {
+		called = esn == "ESN-A" && command.Action == "express" && command.Expression == "happy"
+		return sdkapp.HermesCommandResult{Action: command.Action, Expression: command.Expression}, nil
+	}}
+	server.Register(mux)
+	request := httptest.NewRequest(http.MethodPost, "/bridge/v1/robots/ESN-A/commands", strings.NewReader(`{"action":"express","expression":"happy"}`))
+	request.Header.Set("Authorization", "Bearer "+tokenA)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, request)
+	if w.Code != http.StatusAccepted || !called || !strings.Contains(w.Body.String(), `"expression":"happy"`) {
+		t.Fatalf("curated expression was not dispatched: %d %q", w.Code, w.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodPost, "/bridge/v1/robots/ESN-A/commands", strings.NewReader(`{"action":"express","expression":"anim_arbitrary_01"}`))
+	request.Header.Set("Authorization", "Bearer "+tokenA)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, request)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("arbitrary firmware animation was accepted: %d %q", w.Code, w.Body.String())
+	}
+}
+
 func TestBridgeSnapshotIsScopedAndNeverSerializedAsJSON(t *testing.T) {
 	mux := http.NewServeMux()
 	called := false

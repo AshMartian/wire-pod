@@ -23,6 +23,19 @@ func TestHermesCommandValidationAllowsBoundedAutonomyPrimitives(t *testing.T) {
 	}
 }
 
+func TestHermesCommandValidationUsesClosedExpressionCatalog(t *testing.T) {
+	for _, expression := range []string{"affectionate", "celebrate", "confused", "curious", "excited", "happy", "sad", "thinking"} {
+		if err := ValidateHermesCommand(HermesCommand{Action: "express", Expression: expression}); err != nil {
+			t.Fatalf("rejected supported expression %q: %v", expression, err)
+		}
+	}
+	for _, expression := range []string{"", "angry", "anim_arbitrary_01"} {
+		if err := ValidateHermesCommand(HermesCommand{Action: "express", Expression: expression}); err == nil {
+			t.Fatalf("accepted unsupported expression %q", expression)
+		}
+	}
+}
+
 func TestHermesUndockRequiresFullVectorOnCharger(t *testing.T) {
 	fullOnCharger := &vectorpb.BatteryStateResponse{
 		BatteryLevel:        vectorpb.BatteryLevel_BATTERY_LEVEL_FULL,

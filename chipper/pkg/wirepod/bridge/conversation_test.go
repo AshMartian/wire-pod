@@ -43,6 +43,7 @@ func TestHermesVoicePromptRequiresBoundedEmbodiedActionChain(t *testing.T) {
 		"vector_capture_image",
 		"vector_drive",
 		"vector_say",
+		"vector_express is a fixed, one-shot catalog",
 		"Be audibly present while doing multi-step embodied work",
 		"Do this before observation, camera, movement, expression, or tool discovery",
 		"Do not speak more than twice before the final answer",

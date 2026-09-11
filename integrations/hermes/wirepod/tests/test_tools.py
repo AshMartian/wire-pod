@@ -161,6 +161,12 @@ class ToolsTest(unittest.TestCase):
         result = json.loads(vector_command({"text": "hello"}, self.config(), "say"))
         self.assertTrue(result["ok"])
         self.assertEqual(BridgeHandler.last_command, {"action": "say", "text": "hello"})
+        expression = json.loads(vector_command({"expression": "happy"}, self.config(), "express"))
+        self.assertTrue(expression["ok"])
+        self.assertEqual(BridgeHandler.last_command, {"action": "express", "expression": "happy"})
+        rejected_expression = json.loads(vector_command({"expression": "anim_arbitrary_01"}, self.config(), "express"))
+        self.assertFalse(rejected_expression["ok"])
+        self.assertEqual(rejected_expression["error"], "invalid bounded Vector command")
         rejected = json.loads(vector_command({"left_wheel_mmps": 999, "right_wheel_mmps": 0, "duration_ms": 50}, self.config(), "drive"))
         self.assertFalse(rejected["ok"])
         self.assertEqual(rejected["error"], "invalid bounded Vector command")
@@ -231,6 +237,11 @@ class ToolsTest(unittest.TestCase):
         register(context)
         self.assertEqual(context.schemas["vector_status"]["name"], "vector_status")
         self.assertEqual(context.schemas["vector_capture_image"]["name"], "vector_capture_image")
+        self.assertEqual(
+            context.schemas["vector_express"]["parameters"]["properties"]["expression"]["enum"],
+            ["affectionate", "celebrate", "confused", "curious", "excited", "happy", "sad", "thinking"],
+        )
+        self.assertIn("vector_express", context.handlers)
         self.assertIn("vector_stop", context.handlers)
         self.assertEqual(context.schemas["vector_undock"]["parameters"]["properties"], {})
         self.assertEqual(context.schemas["vector_scan"]["parameters"]["properties"], {})
@@ -271,15 +282,23 @@ class ToolsTest(unittest.TestCase):
                 tool_call_id="call-1",
                 duration_ms=12.5,
             )
+            context.hooks["pre_tool_call"]("vector_express", {"expression": "happy"})
+            context.hooks["post_tool_call"](
+                "vector_express",
+                {"expression": "happy"},
+                '{"ok":true,"result":{"action":"express","expression":"happy"}}',
+            )
 
         records = [call.args[1] for call in info.call_args_list]
-        self.assertEqual(len(records), 2)
+        self.assertEqual(len(records), 4)
         self.assertTrue(all(record.startswith("{") for record in records))
         self.assertIn('"event":"started"', records[0])
         self.assertIn('"event":"completed"', records[1])
         self.assertIn('"text_chars":16', records[0])
         self.assertNotIn("private check-in", "".join(records))
         self.assertIn('"duration_ms":12.5', records[1])
+        self.assertIn('"expression":"happy"', records[2])
+        self.assertIn('"expression":"happy"', records[3])
 
 
 if __name__ == "__main__":

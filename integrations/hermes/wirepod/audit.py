@@ -24,6 +24,7 @@ WIREPOD_TOOLS = frozenset(
         "vector_observe",
         "vector_capture_image",
         "vector_say",
+        "vector_express",
         "vector_drive",
         "vector_move_head",
         "vector_move_lift",
@@ -58,6 +59,10 @@ def _safe_args(args: Any) -> dict[str, Any]:
         summary["text_chars"] = len(text)
         summary["text_sha256"] = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
+    expression = args.get("expression")
+    if isinstance(expression, str):
+        summary["expression"] = expression[:32]
+
     snapshot_id = args.get("snapshot_id")
     if isinstance(snapshot_id, str):
         summary["snapshot_id_present"] = bool(snapshot_id)
@@ -89,6 +94,8 @@ def _safe_result(result: Any) -> dict[str, Any]:
     if isinstance(command_result, dict):
         if isinstance(command_result.get("action"), str):
             summary["action"] = command_result["action"]
+        if isinstance(command_result.get("expression"), str):
+            summary["expression"] = command_result["expression"][:32]
         if isinstance(command_result.get("stop_scheduled"), bool):
             summary["stop_scheduled"] = command_result["stop_scheduled"]
     if parsed.get("_multimodal") is True:

@@ -5,6 +5,7 @@ import json
 from .schemas import (
     VECTOR_DRIVE,
     VECTOR_CAPTURE_IMAGE,
+    VECTOR_EXPRESS,
     VECTOR_MOVE_HEAD,
     VECTOR_MOVE_LIFT,
     VECTOR_OBSERVE,
@@ -62,6 +63,7 @@ def register(ctx) -> None:
     ctx.register_tool(name="vector_observe", toolset="wirepod", schema=VECTOR_OBSERVE, handler=observe_handler)
     ctx.register_tool(name="vector_capture_image", toolset="wirepod", schema=VECTOR_CAPTURE_IMAGE, handler=capture_image_handler)
     ctx.register_tool(name="vector_say", toolset="wirepod", schema=VECTOR_SAY, handler=command_handler("say"))
+    ctx.register_tool(name="vector_express", toolset="wirepod", schema=VECTOR_EXPRESS, handler=command_handler("express"))
     ctx.register_tool(name="vector_drive", toolset="wirepod", schema=VECTOR_DRIVE, handler=command_handler("drive"))
     ctx.register_tool(name="vector_move_head", toolset="wirepod", schema=VECTOR_MOVE_HEAD, handler=command_handler("head"))
     ctx.register_tool(name="vector_move_lift", toolset="wirepod", schema=VECTOR_MOVE_LIFT, handler=command_handler("lift"))

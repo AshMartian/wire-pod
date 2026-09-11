@@ -139,6 +139,11 @@ def _valid_command(command: dict[str, Any]) -> bool:
     if action == "say":
         text = command.get("text")
         return isinstance(text, str) and 1 <= len(text.strip()) <= 280 and set(command) == {"action", "text"}
+    if action == "express":
+        expression = command.get("expression")
+        return isinstance(expression, str) and expression in {
+            "affectionate", "celebrate", "confused", "curious", "excited", "happy", "sad", "thinking"
+        } and set(command) == {"action", "expression"}
     if action == "drive":
         keys = {"action", "left_wheel_mmps", "right_wheel_mmps", "duration_ms"}
         return set(command) == keys and all(isinstance(command[key], int) and not isinstance(command[key], bool) for key in keys - {"action"}) and -200 <= command["left_wheel_mmps"] <= 200 and -200 <= command["right_wheel_mmps"] <= 200 and 50 <= command["duration_ms"] <= 2000

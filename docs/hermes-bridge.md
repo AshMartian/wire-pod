@@ -50,7 +50,7 @@ turn/tool correlation IDs. Speech text, bearer tokens, face data, and camera
 bytes are intentionally omitted; malformed model calls that never reach a
 handler remain covered by Hermes's own tool-executor error log.
 
-The plugin manifest advertises all ten tools, including the multimodal
+The plugin manifest advertises all eleven tools, including the multimodal
 `vector_capture_image` tool. Bridge HTTP failures retain their status class in
 the tool result (for example, HTTP 503 means the bridge answered but the robot
 operation was temporarily unavailable; DNS/socket failures remain bridge
@@ -71,11 +71,22 @@ The command body is one of:
 
 ```json
 {"action":"say","text":"1 to 280 characters"}
+{"action":"express","expression":"happy"}
 {"action":"drive","left_wheel_mmps":100,"right_wheel_mmps":100,"duration_ms":500}
 {"action":"head","speed_rad_per_sec":1,"duration_ms":300}
 {"action":"lift","speed_rad_per_sec":1,"duration_ms":300}
 {"action":"stop"}
 ```
+
+`express` is a curated one-shot native expression, not a raw Vector SDK or
+firmware-animation pass-through. Its supported semantic labels are
+`affectionate`, `celebrate`, `confused`, `curious`, `excited`, `happy`, `sad`,
+and `thinking`. Each call plays exactly one built-in animation under behavior
+control, with a 12-second deadline. Hermes should use at most one intentional
+expression in a response, never as filler. It cannot create, upload, or run a
+custom animation. New multi-step “expressions” may be composed from separately
+bounded tool calls, but each physical action must still be individually
+validated and reported truthfully.
 
 Wheel speeds are limited to ±200 mm/s; head/lift speeds to ±2 rad/s; moving commands run from 50–2000 ms and receive their stop before the default-priority Vector behavior-control lease is released. Commands are serialized per WirePod process, so a newer action cannot cancel another axis's safety stop. Connection inactivity timers are keyed by ESN rather than mutable robot-slice indexes, so disconnecting one enrolled Vector cannot panic the gateway or retarget another timer. These are wheel controls, not autonomous navigation: named locations need an explicit map/pose safety contract before they are exposed.
 

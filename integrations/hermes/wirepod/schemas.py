@@ -49,6 +49,27 @@ VECTOR_SAY = {
     },
 }
 
+VECTOR_EXPRESS = {
+    "name": "vector_express",
+    "description": (
+        "Play one short built-in expression through this profile's Vector. Use only to add a clear, "
+        "human-useful emotional cue; it may occupy the robot's behavior control and should not be used as filler. "
+        "The catalog is fixed: affectionate, celebrate, confused, curious, excited, happy, sad, or thinking. "
+        "This does not create, upload, or execute arbitrary animations."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "expression": {
+                "type": "string",
+                "enum": ["affectionate", "celebrate", "confused", "curious", "excited", "happy", "sad", "thinking"],
+            }
+        },
+        "required": ["expression"],
+        "additionalProperties": False,
+    },
+}
+
 VECTOR_DRIVE = {
     "name": "vector_drive",
     "description": (
