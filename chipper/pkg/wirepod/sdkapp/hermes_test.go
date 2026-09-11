@@ -15,6 +15,16 @@ func TestHermesProcessingCueUsesOneLongNativeAnimation(t *testing.T) {
 	}
 }
 
+func TestHermesListeningURLTargetsOnlyTheLocalVectorConsole(t *testing.T) {
+	endpoint, err := hermesListeningURL("192.0.2.10:443")
+	if err != nil || endpoint != "http://192.0.2.10:8889/consolevarset?key=FakeButtonPressType&value=singlePressDetected" {
+		t.Fatalf("unexpected listening endpoint: %q err=%v", endpoint, err)
+	}
+	if _, err := hermesListeningURL("not-a-target"); err == nil {
+		t.Fatal("accepted a target without a port")
+	}
+}
+
 func TestHermesCommandValidationRejectsUnsafeMotion(t *testing.T) {
 	if err := ValidateHermesCommand(HermesCommand{Action: "drive", LeftWheelMMPS: 201, DurationMS: 50}); err == nil {
 		t.Fatal("accepted unsafe wheel speed")

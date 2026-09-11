@@ -38,6 +38,8 @@ To make an ordinary Vector voice request continue the correct agent rather than 
 
 WirePod transcribes the knowledge-graph request, posts only that text to the matching profile, and speaks the final answer. Each request carries a stable `X-Hermes-Session-Key` (`wirepod:vector:<esn>`) plus a daily `X-Hermes-Session-Id`. Set the optional per-profile `timezone` field to the Hermes profile's IANA timezone when it differs from the Pi, so the day turns over at the intended 04:00 local reset; consented durable facts remain explicitly profile-scoped. A failed Hermes response does not fall back to another Vector or a public model. A newer spoken request from the same Vector cancels the obsolete API stream before beginning its own turn; it is not treated as an error to speak aloud.
 
+Set optional `followup_listen: true` for a profile in `WIREPOD_HERMES_CONVERSATIONS` to make a successful Hermes **intent-fallback** reply open one ordinary native Vector listening turn after its final spoken chunk. This uses Vector's local button-press capture path, then Vector's normal listening timeout applies. It is one turn only—not an always-open microphone—and WirePod does not arm it after an error, cancellation, or a matched native intent.
+
 While a configured Hermes voice request is in flight, WirePod itself plays Vector's native knowledge-graph searching cue. It is a best-effort, non-speaking, wheel-stationary status signal—not an agent tool call—and it is cancelled before the first streamed sentence or completed non-streaming reply is spoken. A newer request from the same Vector replaces the previous cue. If the robot is unavailable, the cue failure is logged and the Hermes request still proceeds.
 
 ## Operator trace

@@ -111,6 +111,13 @@ func replyFromHermesIntent(serial, text string) bool {
 	if !streamed || !spokeChunk {
 		if speakErr := speakHermesIntentReply(serial, answer); speakErr != nil {
 			logger.Println("Hermes intent speech failed: " + speakErr.Error())
+		} else {
+			spokeChunk = true
+		}
+	}
+	if spokeChunk && bridge.HermesFollowupListenEnabled(serial) {
+		if listenErr := sdkapp.HermesStartListening(serial); listenErr != nil {
+			logger.Println("Hermes follow-up listening command failed: " + listenErr.Error())
 		}
 	}
 	return true

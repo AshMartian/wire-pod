@@ -35,10 +35,11 @@ vector_express is a fixed, one-shot catalog of built-in expressive cues: affecti
 For an explicit request to say, tell, or announce specific words, call vector_say with the requested short phrase. WirePod speaks your final text automatically, so do not use vector_say merely to duplicate an ordinary final response. After tools complete, give a brief truthful spoken summary of what happened.`
 
 type conversationTarget struct {
-	URL      string `json:"url"`
-	Key      string `json:"key"`
-	Model    string `json:"model"`
-	TimeZone string `json:"timezone,omitempty"`
+	URL            string `json:"url"`
+	Key            string `json:"key"`
+	Model          string `json:"model"`
+	TimeZone       string `json:"timezone,omitempty"`
+	FollowupListen bool   `json:"followup_listen,omitempty"`
 }
 
 type conversationTargets map[string]conversationTarget
@@ -437,6 +438,18 @@ func HermesConversationEnabled(esn string) bool {
 	}
 	_, ok := targets[strings.ToLower(strings.TrimSpace(esn))]
 	return ok
+}
+
+// HermesFollowupListenEnabled reports whether a successful Hermes voice reply
+// may open exactly one ordinary Vector listening turn. It is deliberately
+// profile-scoped and opt-in: WirePod never keeps a microphone open indefinitely.
+func HermesFollowupListenEnabled(esn string) bool {
+	targets, err := conversationTargetsFromEnv(os.Getenv(hermesConversationEnv))
+	if err != nil {
+		return false
+	}
+	target, ok := targets[strings.ToLower(strings.TrimSpace(esn))]
+	return ok && target.FollowupListen
 }
 
 func truncateRunes(value string, limit int) string {

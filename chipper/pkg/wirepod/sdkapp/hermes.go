@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +60,7 @@ const (
 	// unbounded native behavior on Vector 1.0 and cannot provide a truthful
 	// command completion result to an external agent.
 	hermesScanTimeout   = 6 * time.Second
+	hermesListenTimeout = 6 * time.Second
 	maxHermesWheelMMPS  = 200
 	maxHermesMotionMS   = 2000
 	maxHermesJointRadPS = 2
@@ -74,6 +78,52 @@ var hermesExpressions = map[string]string{
 	"happy":        "anim_onboarding_reacttoface_happy_01",
 	"sad":          "anim_feedback_meanwords_01",
 	"thinking":     "anim_explorer_scan_short_04",
+}
+
+// HermesStartListening opens Vector's ordinary one-turn voice capture flow by
+// using the robot's local console button-press interface. It does not create an
+// audio stream in WirePod and does not leave the microphone continuously open;
+// Vector's native listening timeout remains authoritative.
+func HermesStartListening(serial string) error {
+	hermesControl.Lock()
+	defer hermesControl.Unlock()
+
+	robot, _, err := getRobot(serial)
+	if err != nil {
+		return err
+	}
+	endpoint, err := hermesListeningURL(robot.Target)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(robot.Ctx, hermesListenTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	response, err := (&http.Client{}).Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("Vector listening command returned HTTP %d", response.StatusCode)
+	}
+	return nil
+}
+
+func hermesListeningURL(target string) (string, error) {
+	host, _, err := net.SplitHostPort(target)
+	if err != nil || host == "" {
+		return "", fmt.Errorf("invalid Vector target")
+	}
+	return (&url.URL{
+		Scheme:   "http",
+		Host:     net.JoinHostPort(host, "8889"),
+		Path:     "/consolevarset",
+		RawQuery: url.Values{"key": {"FakeButtonPressType"}, "value": {"singlePressDetected"}}.Encode(),
+	}).String(), nil
 }
 
 const (

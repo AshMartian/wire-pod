@@ -161,6 +161,14 @@ func TestConversationTargetRejectsWeakKeyAndNonHTTPURL(t *testing.T) {
 	}
 }
 
+func TestHermesFollowupListenIsProfileScopedAndOptIn(t *testing.T) {
+	const key = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	t.Setenv(hermesConversationEnv, `{"esn-a":{"url":"http://localhost:8650","key":"`+key+`","model":"vector-n8a4","followup_listen":true},"esn-b":{"url":"http://localhost:8651","key":"`+key+`","model":"vector-004047ef"}}`)
+	if !HermesFollowupListenEnabled("ESN-A") || HermesFollowupListenEnabled("esn-b") || HermesFollowupListenEnabled("unknown") {
+		t.Fatal("follow-up listening was not scoped to its explicit profile")
+	}
+}
+
 func TestDailySessionIDFollowsFourAMResetBoundary(t *testing.T) {
 	zone := time.FixedZone("test", -7*60*60)
 	beforeReset := time.Date(2026, 9, 6, 3, 59, 0, 0, zone)
