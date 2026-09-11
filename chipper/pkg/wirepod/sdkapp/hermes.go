@@ -48,11 +48,11 @@ const (
 	hermesSnapshotTimeout   = 10 * time.Second
 	hermesSpeechTimeout     = 20 * time.Second
 	hermesExpressionTimeout = 12 * time.Second
-	// A processing cue must yield quickly when a response arrives. It is not a
-	// user-visible command and never gets the longer expression deadline.
-	hermesProcessingTimeout = 4 * time.Second
-	hermesMotionTimeout     = 8 * time.Second
-	hermesUndockTimeout     = 30 * time.Second
+	// Bound only acquisition of behavior control. Once Vector is visibly
+	// processing, the caller's conversation context owns its lifetime.
+	hermesProcessingAcquireTimeout = 4 * time.Second
+	hermesMotionTimeout            = 8 * time.Second
+	hermesUndockTimeout            = 30 * time.Second
 	// A scan is a short, in-place head sweep. LookAroundInPlace is an
 	// unbounded native behavior on Vector 1.0 and cannot provide a truthful
 	// command completion result to an external agent.
@@ -76,7 +76,13 @@ var hermesExpressions = map[string]string{
 	"thinking":     "anim_explorer_scan_short_04",
 }
 
-const hermesProcessingAnimation = "anim_knowledgegraph_searching_01"
+const (
+	hermesProcessingAnimation = "anim_knowledgegraph_searching_01"
+	// Play one long native request instead of replaying a short clip from the
+	// start. Twenty-four loops cover the 45-second Hermes voice deadline on the
+	// shipped animation while still yielding immediately on context cancellation.
+	hermesProcessingLoops uint32 = 24
+)
 
 // HermesProcessingIndicator owns the short-lived native activity cue shown
 // while WirePod waits for a Hermes voice response. It is deliberately not a
@@ -155,32 +161,37 @@ func (indicator *HermesProcessingIndicator) run(ctx context.Context) {
 		log.Printf("Hermes processing indicator unavailable for %s: %v", indicator.serial, err)
 		return
 	}
-	for ctx.Err() == nil {
-		actionCtx, cancel := context.WithTimeout(ctx, hermesProcessingTimeout)
-		hermesControl.Lock()
-		err = withHermesBehaviorControlPriority(actionCtx, robot, vectorpb.ControlRequest_OVERRIDE_BEHAVIORS, func(controlCtx context.Context) error {
-			indicator.markDispatched()
-			_, actionErr := robot.Vector.Conn.PlayAnimation(controlCtx, &vectorpb.PlayAnimationRequest{
-				Animation: &vectorpb.Animation{Name: hermesProcessingAnimation},
-				Loops:     1,
-			})
-			return actionErr
-		})
-		hermesControl.Unlock()
-		cancel()
-		if ctx.Err() != nil {
-			return
-		}
-		if err != nil {
-			log.Printf("Hermes processing indicator failed for %s: %v", indicator.serial, err)
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(250 * time.Millisecond):
-		}
+	err = runHermesProcessingAnimation(ctx, robot, indicator.markDispatched)
+	if ctx.Err() != nil {
+		return
 	}
+	if err != nil {
+		log.Printf("Hermes processing indicator failed for %s: %v", indicator.serial, err)
+	}
+}
+
+func runHermesProcessingAnimation(ctx context.Context, robot Robot, dispatched func()) error {
+	// Do not leave a hung acquisition holding the shared SDK lock. Stopping the
+	// timer after control is granted preserves the outer voice-turn context for
+	// the entire continuous animation.
+	controlCtx, cancelControl := context.WithCancel(ctx)
+	defer cancelControl()
+	timeout := time.AfterFunc(hermesProcessingAcquireTimeout, cancelControl)
+	defer timeout.Stop()
+
+	hermesControl.Lock()
+	defer hermesControl.Unlock()
+	return withHermesBehaviorControlPriority(controlCtx, robot, vectorpb.ControlRequest_OVERRIDE_BEHAVIORS, func(actionCtx context.Context) error {
+		if !timeout.Stop() && actionCtx.Err() != nil {
+			return context.DeadlineExceeded
+		}
+		dispatched()
+		_, err := robot.Vector.Conn.PlayAnimation(actionCtx, &vectorpb.PlayAnimationRequest{
+			Animation: &vectorpb.Animation{Name: hermesProcessingAnimation},
+			Loops:     hermesProcessingLoops,
+		})
+		return err
+	})
 }
 
 // Stop ends this turn's activity cue. Do not make a healthy spoken reply wait

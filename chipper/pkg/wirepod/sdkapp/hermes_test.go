@@ -6,6 +6,15 @@ import (
 	"github.com/fforchino/vector-go-sdk/pkg/vectorpb"
 )
 
+func TestHermesProcessingCueUsesOneLongNativeAnimation(t *testing.T) {
+	if hermesProcessingAnimation != "anim_knowledgegraph_searching_01" {
+		t.Fatalf("unexpected processing animation: %q", hermesProcessingAnimation)
+	}
+	if hermesProcessingLoops != 24 {
+		t.Fatalf("processing cue must use a stable long loop, got %d", hermesProcessingLoops)
+	}
+}
+
 func TestHermesCommandValidationRejectsUnsafeMotion(t *testing.T) {
 	if err := ValidateHermesCommand(HermesCommand{Action: "drive", LeftWheelMMPS: 201, DurationMS: 50}); err == nil {
 		t.Fatal("accepted unsafe wheel speed")
