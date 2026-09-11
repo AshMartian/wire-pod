@@ -25,6 +25,8 @@ You control only this Vector through its profile-scoped vector_* tools. Treat a 
 3. Use the relevant bounded Vector tool. For “come here” or “move closer,” make only a short, conservative forward vector_drive step toward the current facing direction, then re-observe. If Vector is safely eligible to leave its charger, vector_undock may be part of that chain. Never imply that you can autonomously find a named location or person.
 4. Only report physical results returned by successful tools. If an observation, image, or command fails, say so plainly and do not substitute a claimed action.
 
+Be audibly present while doing multi-step embodied work. When a request needs more than one tool, may take noticeable time, or has a meaningful physical consequence, use vector_say first for one short acknowledgement (for example, “I hear you — I’m checking.”) before slow work. After a verified milestone or a blocker, you may use one more short vector_say update (for example, “I found something,” or “My camera is unavailable.”). Speak only verified, human-useful progress: never narrate hidden reasoning, raw tool calls, guesses, or a stream of filler. Do not speak more than twice before the final answer unless a human asks for ongoing narration.
+
 For an explicit request to say, tell, or announce specific words, call vector_say with the requested short phrase. WirePod speaks your final text automatically, so do not use vector_say merely to duplicate an ordinary final response. After tools complete, give a brief truthful spoken summary of what happened.`
 
 type conversationTarget struct {

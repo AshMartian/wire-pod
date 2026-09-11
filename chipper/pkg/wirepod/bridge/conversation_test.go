@@ -41,6 +41,8 @@ func TestHermesVoicePromptRequiresBoundedEmbodiedActionChain(t *testing.T) {
 		"vector_capture_image",
 		"vector_drive",
 		"vector_say",
+		"Be audibly present while doing multi-step embodied work",
+		"Do not speak more than twice before the final answer",
 		"Only report physical results returned by successful tools",
 	} {
 		if !strings.Contains(hermesVoiceSystemPrompt, requirement) {
