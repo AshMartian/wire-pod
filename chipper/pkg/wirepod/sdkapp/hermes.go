@@ -221,27 +221,63 @@ func (indicator *HermesProcessingIndicator) run(ctx context.Context) {
 }
 
 func runHermesProcessingAnimation(ctx context.Context, robot Robot, dispatched func()) error {
-	// Do not leave a hung acquisition holding the shared SDK lock. Stopping the
-	// timer after control is granted preserves the outer voice-turn context for
-	// the entire continuous animation.
-	controlCtx, cancelControl := context.WithCancel(ctx)
-	defer cancelControl()
-	timeout := time.AfterFunc(hermesProcessingAcquireTimeout, cancelControl)
-	defer timeout.Stop()
-
 	hermesControl.Lock()
 	defer hermesControl.Unlock()
-	return withHermesBehaviorControlPriority(controlCtx, robot, vectorpb.ControlRequest_OVERRIDE_BEHAVIORS, func(actionCtx context.Context) error {
-		if !timeout.Stop() && actionCtx.Err() != nil {
-			return context.DeadlineExceeded
-		}
-		dispatched()
-		_, err := robot.Vector.Conn.PlayAnimation(actionCtx, &vectorpb.PlayAnimationRequest{
-			Animation: &vectorpb.Animation{Name: hermesProcessingAnimation},
-			Loops:     hermesProcessingLoops,
-		})
+	return withHermesProcessingControl(ctx, robot, dispatched)
+}
+
+// withHermesProcessingControl keeps the behavior-control stream alive after
+// the animation RPC is cancelled. Vector needs the explicit release message to
+// stop a looping native animation; using the same cancelled context for both
+// calls leaves the animation's audio running on the robot.
+func withHermesProcessingControl(animationCtx context.Context, robot Robot, dispatched func()) (result error) {
+	controlCtx, cancelControl := context.WithCancel(context.Background())
+	defer cancelControl()
+	stream, err := robot.Vector.Conn.BehaviorControl(controlCtx)
+	if err != nil {
 		return err
+	}
+	if err = stream.Send(&vectorpb.BehaviorControlRequest{RequestType: &vectorpb.BehaviorControlRequest_ControlRequest{ControlRequest: &vectorpb.ControlRequest{Priority: vectorpb.ControlRequest_OVERRIDE_BEHAVIORS}}}); err != nil {
+		return err
+	}
+	granted := make(chan error, 1)
+	go func() {
+		for {
+			response, receiveErr := stream.Recv()
+			if receiveErr != nil {
+				granted <- receiveErr
+				return
+			}
+			if response.GetControlGrantedResponse() != nil {
+				granted <- nil
+				return
+			}
+		}
+	}()
+	acquireTimer := time.NewTimer(hermesProcessingAcquireTimeout)
+	defer acquireTimer.Stop()
+	select {
+	case err = <-granted:
+		if err != nil {
+			return err
+		}
+	case <-animationCtx.Done():
+		return animationCtx.Err()
+	case <-acquireTimer.C:
+		return context.DeadlineExceeded
+	}
+	defer func() {
+		releaseErr := stream.Send(&vectorpb.BehaviorControlRequest{RequestType: &vectorpb.BehaviorControlRequest_ControlRelease{ControlRelease: &vectorpb.ControlRelease{}}})
+		if result == nil && releaseErr != nil {
+			result = releaseErr
+		}
+	}()
+	dispatched()
+	_, err = robot.Vector.Conn.PlayAnimation(animationCtx, &vectorpb.PlayAnimationRequest{
+		Animation: &vectorpb.Animation{Name: hermesProcessingAnimation},
+		Loops:     hermesProcessingLoops,
 	})
+	return err
 }
 
 // Stop ends this turn's activity cue. Do not make a healthy spoken reply wait
