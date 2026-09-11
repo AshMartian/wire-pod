@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,14 +26,15 @@ You control only this Vector through its profile-scoped vector_* tools. Treat a 
 3. Use the relevant bounded Vector tool. For “come here” or “move closer,” make only a short, conservative forward vector_drive step toward the current facing direction, then re-observe. If Vector is safely eligible to leave its charger, vector_undock may be part of that chain. Never imply that you can autonomously find a named location or person.
 4. Only report physical results returned by successful tools. If an observation, image, or command fails, say so plainly and do not substitute a claimed action.
 
-Be audibly present while doing multi-step embodied work. When a request needs more than one tool, may take noticeable time, or has a meaningful physical consequence, use vector_say first for one short acknowledgement (for example, “I hear you — I’m checking.”) before slow work. After a verified milestone or a blocker, you may use one more short vector_say update (for example, “I found something,” or “My camera is unavailable.”). Speak only verified, human-useful progress: never narrate hidden reasoning, raw tool calls, guesses, or a stream of filler. Do not speak more than twice before the final answer unless a human asks for ongoing narration.
+Be audibly present while doing multi-step embodied work. If you expect to use any Vector tool, first call vector_say with one short acknowledgement (for example, “I hear you — I’m checking.”), then perform the work. Do this before observation, camera, movement, expression, or tool discovery for a physical request. After a verified milestone or a blocker, you may use one more short vector_say update (for example, “I found something,” or “My camera is unavailable.”). Speak only verified, human-useful progress: never narrate hidden reasoning, raw tool calls, guesses, or a stream of filler. Do not speak more than twice before the final answer unless a human asks for ongoing narration.
 
 For an explicit request to say, tell, or announce specific words, call vector_say with the requested short phrase. WirePod speaks your final text automatically, so do not use vector_say merely to duplicate an ordinary final response. After tools complete, give a brief truthful spoken summary of what happened.`
 
 type conversationTarget struct {
-	URL   string `json:"url"`
-	Key   string `json:"key"`
-	Model string `json:"model"`
+	URL      string `json:"url"`
+	Key      string `json:"key"`
+	Model    string `json:"model"`
+	TimeZone string `json:"timezone,omitempty"`
 }
 
 type conversationTargets map[string]conversationTarget
@@ -45,6 +47,53 @@ type conversationMessage struct {
 type conversationReasoning struct {
 	Enabled bool   `json:"enabled"`
 	Effort  string `json:"effort,omitempty"`
+}
+
+// ErrHermesConversationSuperseded means a newer spoken request from the same
+// Vector replaced this turn. It is deliberately distinct from a model or
+// network failure: callers must not speak an error for an obsolete request.
+var ErrHermesConversationSuperseded = errors.New("Hermes conversation superseded by a newer Vector request")
+
+type hermesConversationTurn struct {
+	cancel     context.CancelFunc
+	superseded bool
+}
+
+// Only one live voice turn per Vector is allowed. Hermes's OpenAI-compatible
+// API creates an independent agent for every request, so WirePod owns the
+// barge-in policy at the physical voice boundary. Cancelling the prior HTTP
+// stream tells Hermes to interrupt that agent before the new turn starts.
+var hermesConversationTurns = struct {
+	sync.Mutex
+	active map[string]*hermesConversationTurn
+}{active: make(map[string]*hermesConversationTurn)}
+
+func beginHermesConversationTurn(parent context.Context, esn string) (context.Context, *hermesConversationTurn) {
+	hermesConversationTurns.Lock()
+	defer hermesConversationTurns.Unlock()
+	if prior := hermesConversationTurns.active[esn]; prior != nil {
+		prior.superseded = true
+		prior.cancel()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	turn := &hermesConversationTurn{cancel: cancel}
+	hermesConversationTurns.active[esn] = turn
+	return ctx, turn
+}
+
+func endHermesConversationTurn(esn string, turn *hermesConversationTurn) {
+	hermesConversationTurns.Lock()
+	if hermesConversationTurns.active[esn] == turn {
+		delete(hermesConversationTurns.active, esn)
+	}
+	hermesConversationTurns.Unlock()
+	turn.cancel()
+}
+
+func (turn *hermesConversationTurn) wasSuperseded() bool {
+	hermesConversationTurns.Lock()
+	defer hermesConversationTurns.Unlock()
+	return turn.superseded
 }
 
 type conversationRequest struct {
@@ -77,6 +126,12 @@ func conversationTargetsFromEnv(value string) (conversationTargets, error) {
 		target.URL = strings.TrimRight(target.URL, "/")
 		target.Key = strings.TrimSpace(target.Key)
 		target.Model = strings.TrimSpace(target.Model)
+		target.TimeZone = strings.TrimSpace(target.TimeZone)
+		if target.TimeZone != "" {
+			if _, err := time.LoadLocation(target.TimeZone); err != nil {
+				return nil, os.ErrInvalid
+			}
+		}
 		targets[esn] = target
 	}
 	return targets, nil
@@ -110,6 +165,9 @@ func HermesConversationStream(ctx context.Context, esn, transcript string, onChu
 	if transcript == "" || len([]rune(transcript)) > 2000 {
 		return "", true, false, errors.New("invalid Vector transcript")
 	}
+	cleanESN := strings.ToLower(strings.TrimSpace(esn))
+	requestCtx, turn := beginHermesConversationTurn(ctx, cleanESN)
+	defer endHermesConversationTurn(cleanESN, turn)
 	conversation := conversationRequest{
 		Model:    target.Model,
 		Stream:   true,
@@ -124,19 +182,21 @@ func HermesConversationStream(ctx context.Context, esn, transcript string, onChu
 	if err != nil {
 		return "", true, false, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target.URL+"/v1/chat/completions", bytes.NewReader(payload))
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, target.URL+"/v1/chat/completions", bytes.NewReader(payload))
 	if err != nil {
 		return "", true, false, err
 	}
-	cleanESN := strings.ToLower(strings.TrimSpace(esn))
 	request.Header.Set("Authorization", "Bearer "+target.Key)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "text/event-stream, application/json")
-	request.Header.Set("X-Hermes-Session-Id", dailySessionID(cleanESN, time.Now()))
+	request.Header.Set("X-Hermes-Session-Id", dailySessionIDInZone(cleanESN, time.Now(), target.TimeZone))
 	request.Header.Set("X-Hermes-Session-Key", "wirepod:vector:"+cleanESN)
 	client := &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(request)
 	if err != nil {
+		if turn.wasSuperseded() {
+			return "", true, false, ErrHermesConversationSuperseded
+		}
 		return "", true, false, err
 	}
 	defer response.Body.Close()
@@ -146,13 +206,25 @@ func HermesConversationStream(ctx context.Context, esn, transcript string, onChu
 	if strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
 		answer, err := readHermesSSE(response.Body, onChunk)
 		if err != nil {
+			if turn.wasSuperseded() {
+				return "", true, true, ErrHermesConversationSuperseded
+			}
 			return "", true, true, err
+		}
+		if turn.wasSuperseded() {
+			return "", true, true, ErrHermesConversationSuperseded
 		}
 		return truncateRunes(answer, 480), true, true, nil
 	}
 	answer, err = readHermesJSON(response.Body)
 	if err != nil {
+		if turn.wasSuperseded() {
+			return "", true, false, ErrHermesConversationSuperseded
+		}
 		return "", true, false, err
+	}
+	if turn.wasSuperseded() {
+		return "", true, false, ErrHermesConversationSuperseded
 	}
 	return truncateRunes(answer, 480), true, false, nil
 }
@@ -299,6 +371,15 @@ func (c *hermesSentenceChunker) drain(final bool) []string {
 // profiles' daily reset at 04:00 local time. Conversations before that
 // boundary remain part of the preceding evening's identity-preserving turn.
 func dailySessionID(esn string, now time.Time) string {
+	return dailySessionIDInZone(esn, now, "")
+}
+
+func dailySessionIDInZone(esn string, now time.Time, zone string) string {
+	if zone != "" {
+		if location, err := time.LoadLocation(zone); err == nil {
+			now = now.In(location)
+		}
+	}
 	// time.Now carries the process-local zone. Keeping the supplied wall clock
 	// also makes the reset boundary unambiguous for callers and tests.
 	local := now

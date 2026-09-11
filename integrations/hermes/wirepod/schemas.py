@@ -37,8 +37,9 @@ VECTOR_SAY = {
     "name": "vector_say",
     "description": (
         "Have this profile's Vector speak a short, user-safe sentence through its Vector voice. "
-        "Use when the human explicitly asks Vector to say, tell, or announce specific words; "
-        "do not use it merely to duplicate your final response."
+        "Use it immediately before any tool-using or physically consequential response to acknowledge the "
+        "human while work begins, and when the human explicitly asks Vector to say, tell, or announce specific "
+        "words. Do not use it merely to duplicate the ordinary final response."
     ),
     "parameters": {
         "type": "object",

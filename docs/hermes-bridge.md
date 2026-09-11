@@ -33,10 +33,10 @@ Supported events are `wirepod.face_observed`, `wirepod.face_recognized`, and `wi
 To make an ordinary Vector voice request continue the correct agent rather than a shared anonymous chat, enable the Hermes API server for each profile and add `WIREPOD_HERMES_CONVERSATIONS` on the Pi. Its values are profile-specific API targets, keys, and model names:
 
 ```json
-{"00603f9b":{"url":"http://hermes-host.example:8650","key":"replace-with-a-random-32-character-minimum-api-key","model":"vector-n8a4"}}
+{"00603f9b":{"url":"http://hermes-host.example:8650","key":"replace-with-a-random-32-character-minimum-api-key","model":"vector-n8a4","timezone":"America/Los_Angeles"}}
 ```
 
-WirePod transcribes the knowledge-graph request, posts only that text to the matching profile, and speaks the final answer. Each request carries a stable `X-Hermes-Session-Key` (`wirepod:vector:<esn>`) plus a daily `X-Hermes-Session-Id`. The day turns over at 04:00 local time, matching the configured Hermes profile reset; consented durable facts remain explicitly profile-scoped. A failed Hermes response does not fall back to another Vector or a public model.
+WirePod transcribes the knowledge-graph request, posts only that text to the matching profile, and speaks the final answer. Each request carries a stable `X-Hermes-Session-Key` (`wirepod:vector:<esn>`) plus a daily `X-Hermes-Session-Id`. Set the optional per-profile `timezone` field to the Hermes profile's IANA timezone when it differs from the Pi, so the day turns over at the intended 04:00 local reset; consented durable facts remain explicitly profile-scoped. A failed Hermes response does not fall back to another Vector or a public model. A newer spoken request from the same Vector cancels the obsolete API stream before beginning its own turn; it is not treated as an error to speak aloud.
 
 ## Bridge API
 

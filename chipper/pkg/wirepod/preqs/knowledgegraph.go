@@ -103,6 +103,10 @@ func hermesKG(req *vtt.KnowledgeGraphRequest, speechReq sr.SpeechRequest) string
 		return streamingKG(req, speechReq)
 	}
 	if err != nil {
+		if errors.Is(err, bridge.ErrHermesConversationSuperseded) {
+			logger.Println("Hermes knowledge turn superseded by newer Vector speech")
+			return ""
+		}
 		logger.Println("Hermes knowledge request failed: " + err.Error())
 		return sendHermesKGResponse(req, "I’m sorry, I’m having trouble thinking right now. Please try again shortly.")
 	}

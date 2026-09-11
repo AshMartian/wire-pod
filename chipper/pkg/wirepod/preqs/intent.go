@@ -2,6 +2,7 @@ package processreqs
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -90,6 +91,10 @@ func replyFromHermesIntent(serial, text string) bool {
 		return false
 	}
 	if err != nil {
+		if errors.Is(err, bridge.ErrHermesConversationSuperseded) {
+			logger.Println("Hermes intent turn superseded by newer Vector speech")
+			return true
+		}
 		logger.Println("Hermes intent request failed: " + err.Error())
 		if !spokeChunk && shouldSpeakHermesIntentFallback(started, time.Now()) {
 			if speakErr := speakHermesIntentReply(serial, "I’m sorry, I’m having trouble thinking right now. Please try again shortly."); speakErr != nil {

@@ -3,9 +3,11 @@ package bridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -42,6 +44,7 @@ func TestHermesVoicePromptRequiresBoundedEmbodiedActionChain(t *testing.T) {
 		"vector_drive",
 		"vector_say",
 		"Be audibly present while doing multi-step embodied work",
+		"Do this before observation, camera, movement, expression, or tool discovery",
 		"Do not speak more than twice before the final answer",
 		"Only report physical results returned by successful tools",
 	} {
@@ -127,5 +130,62 @@ func TestDailySessionIDFollowsFourAMResetBoundary(t *testing.T) {
 	}
 	if got, want := dailySessionID("esn-a", atReset), "wirepod-esn-a-2026-09-06"; got != want {
 		t.Fatalf("at reset: got %q, want %q", got, want)
+	}
+}
+
+func TestDailySessionIDUsesConfiguredHermesTimeZone(t *testing.T) {
+	// At this instant the Pi's New York clock is after 04:00, but the Hermes
+	// host's Los Angeles clock is still before it. The configured Hermes zone
+	// must therefore retain the preceding conversation day.
+	now := time.Date(2026, 9, 10, 10, 30, 0, 0, time.UTC)
+	if got, want := dailySessionIDInZone("esn-a", now, "America/Los_Angeles"), "wirepod-esn-a-2026-09-09"; got != want {
+		t.Fatalf("configured zone session: got %q, want %q", got, want)
+	}
+	if got, want := dailySessionIDInZone("esn-a", now, "America/New_York"), "wirepod-esn-a-2026-09-10"; got != want {
+		t.Fatalf("Pi zone session: got %q, want %q", got, want)
+	}
+}
+
+func TestHermesConversationSupersedesOnlySameVectorTurn(t *testing.T) {
+	const key = "cccccccccccccccccccccccccccccccc"
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			close(firstStarted)
+			<-releaseFirst
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Newest answer."}}]}`))
+	}))
+	defer func() {
+		close(releaseFirst)
+		server.Close()
+	}()
+	t.Setenv(hermesConversationEnv, `{"esn-a":{"url":"`+server.URL+`","key":"`+key+`","model":"vector-n8a4"}}`)
+	type result struct {
+		answer string
+		err    error
+	}
+	first := make(chan result, 1)
+	go func() {
+		answer, _, err := HermesConversation(context.Background(), "esn-a", "older request")
+		first <- result{answer: answer, err: err}
+	}()
+	<-firstStarted
+	answer, configured, err := HermesConversation(context.Background(), "esn-a", "newer request")
+	if err != nil || !configured || answer != "Newest answer." {
+		t.Fatalf("newer turn failed: configured=%v answer=%q err=%v", configured, answer, err)
+	}
+	var stale result
+	select {
+	case stale = <-first:
+	case <-time.After(time.Second):
+		t.Fatal("newer turn did not cancel the stale Hermes request")
+	}
+	if stale.answer != "" || !errors.Is(stale.err, ErrHermesConversationSuperseded) {
+		t.Fatalf("stale turn was not classified as superseded: answer=%q err=%v", stale.answer, stale.err)
 	}
 }
