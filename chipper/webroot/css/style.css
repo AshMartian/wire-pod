@@ -413,9 +413,29 @@ input[type='radio']:disabled:after {
 .vectorFace {
   height: 60px;
   width: 60px;
+  position: relative;
+  isolation: isolate;
+  --vector-eye-tint: #35e0cf;
   background-position: center;
   background-size: contain;
   background-repeat: no-repeat;
+}
+
+/* Keep the original animated Vector artwork intact and tint only its eye field. */
+.vectorFace::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: var(--vector-eye-tint);
+  opacity: .76;
+  mix-blend-mode: color;
+  -webkit-mask-image:
+    radial-gradient(ellipse 17% 19% at 36% 50%, #000 67%, transparent 100%),
+    radial-gradient(ellipse 17% 19% at 65% 50%, #000 67%, transparent 100%);
+  mask-image:
+    radial-gradient(ellipse 17% 19% at 36% 50%, #000 67%, transparent 100%),
+    radial-gradient(ellipse 17% 19% at 65% 50%, #000 67%, transparent 100%);
 }
 
 .batteryLevel {
