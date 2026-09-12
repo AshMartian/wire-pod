@@ -430,12 +430,9 @@ input[type='radio']:disabled:after {
   background: var(--vector-eye-tint);
   opacity: .76;
   mix-blend-mode: color;
-  -webkit-mask-image:
-    radial-gradient(ellipse 17% 19% at 36% 50%, #000 67%, transparent 100%),
-    radial-gradient(ellipse 17% 19% at 65% 50%, #000 67%, transparent 100%);
-  mask-image:
-    radial-gradient(ellipse 17% 19% at 36% 50%, #000 67%, transparent 100%),
-    radial-gradient(ellipse 17% 19% at 65% 50%, #000 67%, transparent 100%);
+  /* One shared, rounded eye canvas. Individual circular masks clipped moving
+     expressions at their edges, especially on the red eye animation. */
+  clip-path: inset(29% 17% 29% 17% round 30%);
 }
 
 .batteryLevel {
